@@ -31,6 +31,22 @@ export class UsersService {
     return user;
   }
 
+  async uploadPhoto(id: string, file: Express.Multer.File) {
+    const base64 = file.buffer.toString('base64');
+    return this.userModel
+      .findByIdAndUpdate(
+        id,
+        { photoUrl: `/users/${id}/photo`, photoData: base64, photoMime: file.mimetype },
+        { new: true },
+      )
+      .select('-password')
+      .lean();
+  }
+
+  async findByIdWithPhoto(id: string) {
+    return this.userModel.findById(id).select('+photoData +photoMime').lean();
+  }
+
   async delete(id: string) {
     await this.userModel.findByIdAndDelete(id);
     return { deleted: true };
