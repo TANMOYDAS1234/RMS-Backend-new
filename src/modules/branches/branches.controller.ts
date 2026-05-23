@@ -24,14 +24,20 @@ export class BranchesController {
   @Roles('admin', 'manager')
   findAll() { return this.branchesService.findAll(); }
 
+  // Public — needed by QR web app to check feature flags before showing order UI
+  @Get('slug/:slug')
+  findBySlug(@Param('slug') slug: string) { return this.branchesService.findBySlug(slug); }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'manager')
   findOne(@Param('id') id: string) { return this.branchesService.findById(id); }
 
-  // Public — needed by QR web app to check feature flags before showing order UI
-  @Get('slug/:slug')
-  findBySlug(@Param('slug') slug: string) { return this.branchesService.findBySlug(slug); }
+  // Public — QR app polls this to know if ordering is live
+  @Get(':id/qr-enabled')
+  isQrEnabled(@Param('id') id: string) {
+    return this.branchesService.isQrOrderingEnabled(id).then((enabled) => ({ enabled }));
+  }
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -58,10 +64,4 @@ export class BranchesController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
   delete(@Param('id') id: string) { return this.branchesService.delete(id); }
-
-  // Public — QR app polls this to know if ordering is live
-  @Get(':id/qr-enabled')
-  isQrEnabled(@Param('id') id: string) {
-    return this.branchesService.isQrOrderingEnabled(id).then((enabled) => ({ enabled }));
-  }
 }

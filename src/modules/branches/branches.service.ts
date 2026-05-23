@@ -31,10 +31,14 @@ export class BranchesService {
     return b;
   }
 
-  async updateFeatures(id: string, features: Partial<Branch['features']>) {
+  async updateFeatures(id: string, features: Record<string, any>) {
+    const setPayload: Record<string, any> = {};
+    for (const key of Object.keys(features)) {
+      setPayload[`features.${key}`] = features[key];
+    }
     const b = await this.branchModel.findByIdAndUpdate(
       id,
-      { $set: { features } },
+      { $set: setPayload },
       { new: true },
     ).lean();
     if (!b) throw new NotFoundException('Branch not found');
