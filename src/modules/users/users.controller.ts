@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Patch, Delete, Body, Param,
+  Controller, Get, Post, Patch, Delete, Body, Param, Request,
   UseGuards, UseInterceptors, UploadedFile, BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -46,6 +46,12 @@ export class UsersController {
   @Post()
   @Roles('admin')
   create(@Body() dto: CreateUserDto) { return this.usersService.create(dto); }
+
+  @Patch('me/fcm-token')
+  @Roles('admin', 'manager', 'waiter', 'chef', 'cashier')
+  updateFcmToken(@Request() req: any, @Body('fcmToken') fcmToken: string) {
+    return this.usersService.update(req.user._id, { fcmToken });
+  }
 
   @Patch(':id')
   @Roles('admin')
