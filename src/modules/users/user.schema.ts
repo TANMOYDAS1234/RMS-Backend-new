@@ -20,6 +20,7 @@ export class User {
   @Prop({ required: true, unique: true, lowercase: true }) email: string;
   @Prop({ required: true, select: false }) password: string;
   @Prop({ enum: UserRole, default: UserRole.WAITER }) role: UserRole;
+  @Prop({ type: String, default: null }) branchId: string | null;
   @Prop() fcmToken?: string;
   @Prop({ default: true }) isActive: boolean;
   @Prop() photoUrl?: string;

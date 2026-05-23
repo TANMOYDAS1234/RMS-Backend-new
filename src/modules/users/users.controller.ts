@@ -23,6 +23,7 @@ class UpdateUserDto {
   @IsOptional() @IsString() name?: string;
   @IsOptional() @IsEnum(UserRole) role?: UserRole;
   @IsOptional() isActive?: boolean;
+  @IsOptional() @IsString() branchId?: string;
 }
 
 @Controller('users')
@@ -51,6 +52,21 @@ export class UsersController {
   @Patch(':id')
   @Roles('admin')
   update(@Param('id') id: string, @Body() dto: UpdateUserDto) { return this.usersService.update(id, dto); }
+
+  @Post('me/photo')
+  @Roles('admin', 'manager', 'waiter', 'chef', 'cashier')
+  @UseInterceptors(FileInterceptor('photo', {
+    storage: memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (_, file, cb) => {
+      if (!file.mimetype.match(/^image\//)) return cb(new BadRequestException('Images only'), false);
+      cb(null, true);
+    },
+  }))
+  uploadOwnPhoto(@Request() req: any, @UploadedFile() file: Express.Multer.File) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    return this.usersService.uploadPhoto(req.user._id, file);
+  }
 
   @Post(':id/photo')
   @Roles('admin')

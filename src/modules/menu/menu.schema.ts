@@ -1,7 +1,7 @@
 // ─── Menu Schema ─────────────────────────────────────────────────────────────
 
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document } from 'mongoose';
 
 export type MenuItemDocument = MenuItem & Document;
 
@@ -29,8 +29,8 @@ class IngredientRef {
 @Schema({ timestamps: true })
 export class MenuItem {
   // ── Branch scope ────────────────────────────────────────────────────────────
-  @Prop({ type: Types.ObjectId, ref: 'Branch', required: true, index: true })
-  branchId: Types.ObjectId;
+  @Prop({ type: String, required: true, index: true })
+  branchId: string;
 
   // ── Core ────────────────────────────────────────────────────────────────────
   @Prop({ required: true }) name: string;

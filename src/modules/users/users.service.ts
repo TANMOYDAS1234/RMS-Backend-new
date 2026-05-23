@@ -25,7 +25,7 @@ export class UsersService {
     return user;
   }
 
-  async update(id: string, dto: Partial<{ name: string; role: UserRole; isActive: boolean; fcmToken: string }>) {
+  async update(id: string, dto: Partial<{ name: string; role: UserRole; isActive: boolean; fcmToken: string; branchId: string }>) {
     const user = await this.userModel.findByIdAndUpdate(id, dto, { new: true }).select('-password').lean();
     if (!user) throw new NotFoundException('User not found');
     return user;
