@@ -1,6 +1,6 @@
-// ─── Auth Service ────────────────────────────────────────────────────────────
+// ─── Auth Service ─────────────────────────────────────────────────────────────
 
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, NotFoundException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -26,8 +26,27 @@ export class AuthService {
     const payload = { sub: user._id, email: user.email, role: user.role };
     return {
       accessToken: this.jwtService.sign(payload),
-      user: { id: user._id, name: user.name, email: user.email, role: user.role },
+      user: { id: user._id, name: user.name, email: user.email, role: user.role, photoUrl: user.photoUrl },
     };
+  }
+
+  async getMe(userId: string) {
+    const user = await this.userModel.findById(userId).select('-password').lean();
+    if (!user) throw new NotFoundException('User not found');
+    return user;
+  }
+
+  async updateMe(userId: string, dto: { name?: string; email?: string; password?: string }) {
+    const update: any = {};
+    if (dto.name) update.name = dto.name.trim();
+    if (dto.email) update.email = dto.email.toLowerCase().trim();
+    if (dto.password) update.password = await bcrypt.hash(dto.password, 10);
+    const user = await this.userModel
+      .findByIdAndUpdate(userId, update, { new: true })
+      .select('-password')
+      .lean();
+    if (!user) throw new NotFoundException('User not found');
+    return user;
   }
 
   async validateToken(payload: any) {
