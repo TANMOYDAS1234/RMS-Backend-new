@@ -25,6 +25,12 @@ export class BranchesService {
     return this.branchModel.create(dto);
   }
 
+  async update(id: string, dto: Partial<{ name: string; address: string; slug: string; gstRate: number; isActive: boolean }>) {
+    const b = await this.branchModel.findByIdAndUpdate(id, dto, { new: true }).lean();
+    if (!b) throw new NotFoundException('Branch not found');
+    return b;
+  }
+
   async updateFeatures(id: string, features: Partial<Branch['features']>) {
     const b = await this.branchModel.findByIdAndUpdate(
       id,
@@ -33,6 +39,11 @@ export class BranchesService {
     ).lean();
     if (!b) throw new NotFoundException('Branch not found');
     return b;
+  }
+
+  async delete(id: string) {
+    await this.branchModel.findByIdAndDelete(id);
+    return { deleted: true };
   }
 
   async isQrOrderingEnabled(branchId: string): Promise<boolean> {
