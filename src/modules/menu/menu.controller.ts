@@ -1,10 +1,10 @@
 import {
   Controller, Get, Post, Patch, Delete, Body, Param, Query,
-  UseGuards, UseInterceptors, UploadedFile, BadRequestException,
+  UseGuards, UseInterceptors, UploadedFile, BadRequestException, Res,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
+import { memoryStorage } from 'multer';
+import { Response } from 'express';
 import { IsString, IsNumber, IsOptional, IsBoolean, IsArray, Min, Max } from 'class-validator';
 import { MenuService } from './menu.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -30,10 +30,7 @@ class RateDto {
   @IsNumber() @Min(1) @Max(5) score: number;
 }
 
-const mediaStorage = (prefix: string) => diskStorage({
-  destination: './uploads',
-  filename: (_, file, cb) => cb(null, `${prefix}-${Date.now()}${extname(file.originalname)}`),
-});
+const mediaStorage = () => memoryStorage();
 
 @Controller('menu')
 export class MenuController {
@@ -74,7 +71,7 @@ export class MenuController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'manager')
   @UseInterceptors(FileInterceptor('image', {
-    storage: mediaStorage('menu-img'),
+    storage: mediaStorage(),
     limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (_, file, cb) => {
       if (!file.mimetype.match(/^image\//)) return cb(new BadRequestException('Images only'), false);
@@ -86,13 +83,24 @@ export class MenuController {
     return this.menuService.uploadImage(id, file);
   }
 
+  // ── Serve image ───────────────────────────────────────────────────────────
+  @Get(':id/image')
+  async serveImage(@Param('id') id: string, @Res() res: Response) {
+    const item = await this.menuService.findById(id);
+    if (!item?.imageData) return res.status(404).send('Not found');
+    const buf = Buffer.from((item as any).imageData, 'base64');
+    res.set('Content-Type', (item as any).imageMime || 'image/jpeg');
+    res.set('Cache-Control', 'public, max-age=86400');
+    return res.send(buf);
+  }
+
   // ── GLB (3D model) upload ─────────────────────────────────────────────────
   @Post(':id/glb')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'manager')
   @UseInterceptors(FileInterceptor('glb', {
-    storage: mediaStorage('menu-glb'),
-    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB for 3D models
+    storage: mediaStorage(),
+    limits: { fileSize: 50 * 1024 * 1024 },
     fileFilter: (_, file, cb) => {
       const ok = file.originalname.toLowerCase().endsWith('.glb') ||
                  file.mimetype === 'model/gltf-binary' ||
@@ -104,6 +112,17 @@ export class MenuController {
   uploadGlb(@Param('id') id: string, @UploadedFile() file: Express.Multer.File) {
     if (!file) throw new BadRequestException('No file uploaded');
     return this.menuService.uploadGlb(id, file);
+  }
+
+  // ── Serve GLB ─────────────────────────────────────────────────────────────
+  @Get(':id/glb')
+  async serveGlb(@Param('id') id: string, @Res() res: Response) {
+    const item = await this.menuService.findById(id);
+    if (!item?.glbData) return res.status(404).send('Not found');
+    const buf = Buffer.from((item as any).glbData, 'base64');
+    res.set('Content-Type', 'model/gltf-binary');
+    res.set('Cache-Control', 'public, max-age=86400');
+    return res.send(buf);
   }
 
   // ── Customer rating ───────────────────────────────────────────────────────

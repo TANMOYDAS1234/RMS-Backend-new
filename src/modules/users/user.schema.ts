@@ -23,6 +23,8 @@ export class User {
   @Prop() fcmToken?: string;
   @Prop({ default: true }) isActive: boolean;
   @Prop() photoUrl?: string;
+  @Prop({ select: false }) photoData?: string;  // base64
+  @Prop({ select: false }) photoMime?: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

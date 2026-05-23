@@ -10,6 +10,7 @@ class FeatureToggles {
   @Prop({ default: true })  qrOrdering: boolean;
   @Prop({ default: true })  onlinePayment: boolean;
   @Prop({ default: true })  loyaltySystem: boolean;
+  @Prop({ default: true })  tableReservations: boolean;
   // Time-based activation: null = always active
   @Prop({ type: String, default: null }) qrOrderingActiveFrom: string | null; // 'HH:mm'
   @Prop({ type: String, default: null }) qrOrderingActiveTo: string | null;   // 'HH:mm'

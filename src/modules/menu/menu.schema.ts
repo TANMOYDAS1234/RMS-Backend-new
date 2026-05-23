@@ -42,8 +42,11 @@ export class MenuItem {
   @Prop({ default: 0 }) prepTimeMinutes: number;
 
   // ── Media ───────────────────────────────────────────────────────────────────
-  @Prop({ default: null }) imageUrl: string | null;   // dish photo
-  @Prop({ default: null }) glbUrl: string | null;     // 3D model (.glb)
+  @Prop({ default: null }) imageUrl: string | null;   // served via GET /menu/:id/image
+  @Prop({ default: null }) imageData: string | null;  // base64 stored in MongoDB
+  @Prop({ default: null }) imageMime: string | null;
+  @Prop({ default: null }) glbUrl: string | null;     // served via GET /menu/:id/glb
+  @Prop({ default: null }) glbData: string | null;    // base64 stored in MongoDB
 
   // ── Rich data ───────────────────────────────────────────────────────────────
   @Prop({ type: [String], default: [] }) tags: string[];   // ['spicy','vegan','bestseller']
