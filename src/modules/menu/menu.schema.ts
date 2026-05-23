@@ -1,7 +1,7 @@
 // ─── Menu Schema ─────────────────────────────────────────────────────────────
 
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document } from 'mongoose';
+import { Document, Types } from 'mongoose';
 
 export type MenuItemDocument = MenuItem & Document;
 
@@ -17,22 +17,45 @@ class Modifier {
   @Prop({ default: 0 }) extraPrice: number;
 }
 
+@Schema({ _id: false })
+class IngredientRef {
+  @Prop() ingredientId: string;
+  @Prop({ required: true }) name: string;       // display name e.g. "Tomato"
+  @Prop({ default: 0 }) quantity: number;
+  @Prop({ default: '' }) unit: string;
+  @Prop({ default: false }) isAllergen: boolean; // highlight allergens
+}
+
 @Schema({ timestamps: true })
 export class MenuItem {
+  // ── Branch scope ────────────────────────────────────────────────────────────
+  @Prop({ type: Types.ObjectId, ref: 'Branch', required: true, index: true })
+  branchId: Types.ObjectId;
+
+  // ── Core ────────────────────────────────────────────────────────────────────
   @Prop({ required: true }) name: string;
-  @Prop() description?: string;
+  @Prop({ default: '' }) description: string;
   @Prop({ required: true }) category: string;
   @Prop({ required: true, min: 0 }) basePrice: number;
-  @Prop({ type: [Variant], default: [] }) variants: Variant[];
-  @Prop({ type: [Modifier], default: [] }) modifiers: Modifier[];
   @Prop({ default: true }) isAvailable: boolean;
-  @Prop() imageUrl?: string;
+  @Prop({ default: false }) isVeg: boolean;
   @Prop({ default: 0 }) prepTimeMinutes: number;
 
-  // Inventory link for auto-deduction
-  @Prop({ type: [{ ingredientId: String, quantity: Number, unit: String }], default: [] })
-  ingredients: { ingredientId: string; quantity: number; unit: string }[];
+  // ── Media ───────────────────────────────────────────────────────────────────
+  @Prop({ default: null }) imageUrl: string | null;   // dish photo
+  @Prop({ default: null }) glbUrl: string | null;     // 3D model (.glb)
+
+  // ── Rich data ───────────────────────────────────────────────────────────────
+  @Prop({ type: [String], default: [] }) tags: string[];   // ['spicy','vegan','bestseller']
+  @Prop({ type: [IngredientRef], default: [] }) ingredients: IngredientRef[];
+  @Prop({ type: [Variant], default: [] }) variants: Variant[];
+  @Prop({ type: [Modifier], default: [] }) modifiers: Modifier[];
+
+  // ── Rating (aggregated) ─────────────────────────────────────────────────────
+  @Prop({ default: 0, min: 0, max: 5 }) rating: number;
+  @Prop({ default: 0 }) ratingCount: number;
 }
 
 export const MenuItemSchema = SchemaFactory.createForClass(MenuItem);
-MenuItemSchema.index({ category: 1, isAvailable: 1 });
+MenuItemSchema.index({ branchId: 1, category: 1, isAvailable: 1 });
+MenuItemSchema.index({ branchId: 1, isAvailable: 1 });
