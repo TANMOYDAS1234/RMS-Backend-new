@@ -7,10 +7,11 @@ import { Bill, BillSchema } from '../billing/bill.schema';
 import { User, UserSchema } from '../users/user.schema';
 import { Ingredient, IngredientSchema } from '../inventory/ingredient.schema';
 import { Table, TableSchema } from '../tables/table.schema';
-import { OrdersGateway } from '../../gateways/orders.gateway';
+import { OrdersModule } from '../orders/orders.module';
 
 @Module({
   imports: [
+    OrdersModule,
     MongooseModule.forFeature([
       { name: Order.name, schema: OrderSchema },
       { name: Bill.name, schema: BillSchema },
@@ -20,6 +21,6 @@ import { OrdersGateway } from '../../gateways/orders.gateway';
     ]),
   ],
   controllers: [ManagerController],
-  providers: [ManagerService, OrdersGateway],
+  providers: [ManagerService],
 })
 export class ManagerModule {}

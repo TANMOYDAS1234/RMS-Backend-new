@@ -3,6 +3,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { IsEnum, IsString, IsNumber, IsOptional, Min, Max } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ManagerService } from './manager.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -11,8 +12,8 @@ import { OrderStatus } from '../orders/order.schema';
 import { TableStatus } from '../tables/table.schema';
 
 class ApplyDiscountDto {
-  @IsNumber() @Min(0) @Max(100) discountPercent: number;
-  @IsString() @IsOptional() reason: string;
+  @Type(() => Number) @IsNumber() @Min(0) @Max(100) discountPercent: number;
+  @IsString() @IsOptional() reason?: string;
 }
 
 class OverrideStatusDto {

@@ -11,6 +11,6 @@ import { OrdersGateway } from '../../gateways/orders.gateway';
   imports: [MongooseModule.forFeature([{ name: Order.name, schema: OrderSchema }])],
   controllers: [OrdersController],
   providers: [OrdersService, OrdersGateway],
-  exports: [OrdersService],
+  exports: [OrdersService, OrdersGateway],
 })
 export class OrdersModule {}
