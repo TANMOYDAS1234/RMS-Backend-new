@@ -1,8 +1,8 @@
 import {
   Controller, Get, Post, Patch, Body, Param, Request,
-  UseGuards, IsString, IsNumber, IsOptional, Min, Max,
+  UseGuards,
 } from '@nestjs/common';
-import { IsEnum } from 'class-validator';
+import { IsEnum, IsString, IsNumber, IsOptional, Min, Max } from 'class-validator';
 import { ManagerService } from './manager.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -11,8 +11,8 @@ import { OrderStatus } from '../orders/order.schema';
 import { TableStatus } from '../tables/table.schema';
 
 class ApplyDiscountDto {
-  discountPercent: number;
-  reason: string;
+  @IsNumber() @Min(0) @Max(100) discountPercent: number;
+  @IsString() @IsOptional() reason: string;
 }
 
 class OverrideStatusDto {
@@ -24,12 +24,12 @@ class UpdateTableStatusDto {
 }
 
 class ComplaintDto {
-  tableLabel: string;
-  issue: string;
+  @IsString() tableLabel: string;
+  @IsString() issue: string;
 }
 
 class ShortageDto {
-  note: string;
+  @IsString() note: string;
 }
 
 @Controller('manager')
