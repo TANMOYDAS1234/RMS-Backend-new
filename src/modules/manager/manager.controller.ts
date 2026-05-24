@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Patch, Body, Param, Request,
-  UseGuards,
+  UseGuards, NotFoundException,
 } from '@nestjs/common';
 import { IsEnum, IsString, IsNumber, IsOptional, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -8,17 +8,7 @@ import { ManagerService } from './manager.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { OrderStatus } from '../orders/order.schema';
 import { TableStatus } from '../tables/table.schema';
-
-class ApplyDiscountDto {
-  @Type(() => Number) @IsNumber() @Min(0) @Max(100) discountPercent: number;
-  @IsString() @IsOptional() reason?: string;
-}
-
-class OverrideStatusDto {
-  @IsEnum(OrderStatus) status: OrderStatus;
-}
 
 class UpdateTableStatusDto {
   @IsEnum(TableStatus) status: TableStatus;
@@ -43,14 +33,32 @@ export class ManagerController {
   @Get('operations')
   getOperations() { return this.managerService.getOperationsSummary(); }
 
-  @Patch('orders/:id/force-close')
-  forceClose(@Param('id') id: string, @Request() req: any) {
-    return this.managerService.forceCloseOrder(id, req.user._id);
-  }
-
-  @Patch('orders/:id/override-status')
-  overrideStatus(@Param('id') id: string, @Body() dto: OverrideStatusDto, @Request() req: any) {
-    return this.managerService.overrideStatus(id, dto.status, req.user._id);
+  // ── Single order-action endpoint — avoids :id/:suffix param collision ──────
+  // Handles: force-close | override-status | discount | prioritize
+  @Patch('order-action/:action/:id')
+  orderAction(
+    @Param('action') action: string,
+    @Param('id') id: string,
+    @Body() body: any,
+    @Request() req: any,
+  ) {
+    switch (action) {
+      case 'force-close':
+        return this.managerService.forceCloseOrder(id, req.user._id);
+      case 'override-status':
+        return this.managerService.overrideStatus(id, body.status, req.user._id);
+      case 'discount':
+        return this.managerService.applyDiscount(
+          id,
+          Number(body.discountPercent ?? 0),
+          req.user._id,
+          body.reason ?? 'Manager discount',
+        );
+      case 'prioritize':
+        return this.managerService.prioritizeOrder(id, req.user._id);
+      default:
+        throw new NotFoundException(`Unknown action: ${action}`);
+    }
   }
 
   // ── Tables ─────────────────────────────────────────────────────────────────
@@ -70,19 +78,9 @@ export class ManagerController {
   @Get('discount-requests')
   getDiscountRequests() { return this.managerService.getPendingDiscountRequests(); }
 
-  @Patch('orders/:id/discount')
-  applyDiscount(@Param('id') id: string, @Body() dto: ApplyDiscountDto, @Request() req: any) {
-    return this.managerService.applyDiscount(id, dto.discountPercent, req.user._id, dto.reason);
-  }
-
   // ── Kitchen ────────────────────────────────────────────────────────────────
   @Get('kitchen')
   getKitchen() { return this.managerService.getKitchenWorkload(); }
-
-  @Patch('orders/:id/prioritize')
-  prioritize(@Param('id') id: string, @Request() req: any) {
-    return this.managerService.prioritizeOrder(id, req.user._id);
-  }
 
   // ── Inventory ──────────────────────────────────────────────────────────────
   @Get('inventory')
