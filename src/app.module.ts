@@ -15,6 +15,8 @@ import { BranchesModule } from './modules/branches/branches.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { ManagerModule } from './modules/manager/manager.module';
+import { PaymentGatewayModule } from './modules/billing/payment-gateway/payment-gateway.module';
+import { StorageModule } from './common/storage/storage.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { IdempotencyInterceptor } from './common/interceptors/idempotency.interceptor';
 import { AppController } from './app.controller';
@@ -46,6 +48,8 @@ import { AppController } from './app.controller';
     AnalyticsModule,
     AdminModule,
     ManagerModule,
+    PaymentGatewayModule,
+    StorageModule,
   ],
   controllers: [AppController],
   providers: [

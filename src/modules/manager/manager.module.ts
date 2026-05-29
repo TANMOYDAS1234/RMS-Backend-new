@@ -8,6 +8,10 @@ import { User, UserSchema } from '../users/user.schema';
 import { Ingredient, IngredientSchema } from '../inventory/ingredient.schema';
 import { Table, TableSchema } from '../tables/table.schema';
 import { OrdersModule } from '../orders/orders.module';
+import {
+  ManagerActionLog,
+  ManagerActionLogSchema,
+} from './manager-action-log.schema';
 
 @Module({
   imports: [
@@ -18,6 +22,7 @@ import { OrdersModule } from '../orders/orders.module';
       { name: User.name, schema: UserSchema },
       { name: Ingredient.name, schema: IngredientSchema },
       { name: Table.name, schema: TableSchema },
+      { name: ManagerActionLog.name, schema: ManagerActionLogSchema },
     ]),
   ],
   controllers: [ManagerController],

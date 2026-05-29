@@ -1,12 +1,17 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Order, OrderDocument, OrderStatus } from '../orders/order.schema';
 import { Bill, BillDocument } from '../billing/bill.schema';
 import { User, UserDocument } from '../users/user.schema';
 import { Ingredient, IngredientDocument } from '../inventory/ingredient.schema';
 import { Table, TableDocument, TableStatus } from '../tables/table.schema';
 import { OrdersGateway } from '../../gateways/orders.gateway';
+import {
+  ManagerActionLog,
+  ManagerActionLogDocument,
+  ManagerActionType,
+} from './manager-action-log.schema';
 
 @Injectable()
 export class ManagerService {
@@ -16,8 +21,44 @@ export class ManagerService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Ingredient.name) private ingredientModel: Model<IngredientDocument>,
     @InjectModel(Table.name) private tableModel: Model<TableDocument>,
+    @InjectModel(ManagerActionLog.name)
+    private actionLogModel: Model<ManagerActionLogDocument>,
     private readonly gateway: OrdersGateway,
   ) {}
+
+  // Append-only audit trail for manager actions. Fire-and-forget so the
+  // user-facing mutation isn't blocked if the log insert hiccups; we still
+  // log the failure to stderr so it shows up in observability.
+  private _audit(entry: Partial<ManagerActionLog>): void {
+    this.actionLogModel.create(entry).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('[ManagerActionLog] insert failed', err);
+    });
+  }
+
+  // Public read for the audit UI; supports filter + paging.
+  async listActions(
+    managerId?: string,
+    action?: ManagerActionType,
+    skip = 0,
+    limit = 100,
+  ) {
+    const filter: any = {};
+    if (managerId) filter.managerId = managerId;
+    if (action) filter.action = action;
+    const safeLimit = Math.min(Math.max(limit, 1), 500);
+    const safeSkip = Math.max(skip, 0);
+    const [items, total] = await Promise.all([
+      this.actionLogModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(safeSkip)
+        .limit(safeLimit)
+        .lean(),
+      this.actionLogModel.countDocuments(filter),
+    ]);
+    return { items, total, skip: safeSkip, limit: safeLimit };
+  }
 
   // ── Operations: live order pipeline ────────────────────────────────────────
   async getOperationsSummary() {
@@ -83,11 +124,20 @@ export class ManagerService {
 
   // ── Force-close order (manager override) ───────────────────────────────────
   async forceCloseOrder(orderId: string, managerId: string, expectedVersion?: number) {
+    let prevStatus: OrderStatus | undefined;
     const order = await this._withVersionedOrder(orderId, expectedVersion, (o) => {
       if (o.status === OrderStatus.CLOSED) throw new BadRequestException('Already closed');
-      const prev = o.status;
+      prevStatus = o.status;
       o.status = OrderStatus.CLOSED;
-      o.auditLog.push({ action: 'FORCE_CLOSED_MANAGER', by: managerId, at: new Date(), meta: { previousStatus: prev } });
+      o.auditLog.push({ action: 'FORCE_CLOSED_MANAGER', by: managerId, at: new Date(), meta: { previousStatus: prevStatus } });
+    });
+    this._audit({
+      managerId,
+      action: ManagerActionType.FORCE_CLOSE,
+      orderId: new Types.ObjectId(orderId),
+      tableLabel: order.tableLabel,
+      before: { status: prevStatus },
+      after: { status: OrderStatus.CLOSED },
     });
     this.gateway.emitOrderUpdated(order);
     return order;
@@ -98,10 +148,19 @@ export class ManagerService {
     if (!Object.values(OrderStatus).includes(status)) {
       throw new BadRequestException(`Invalid status: ${status}`);
     }
+    let prev: OrderStatus | undefined;
     const order = await this._withVersionedOrder(orderId, expectedVersion, (o) => {
-      const prev = o.status;
+      prev = o.status;
       o.status = status;
       o.auditLog.push({ action: 'STATUS_OVERRIDE', by: managerId, at: new Date(), meta: { from: prev, to: status } });
+    });
+    this._audit({
+      managerId,
+      action: ManagerActionType.OVERRIDE_STATUS,
+      orderId: new Types.ObjectId(orderId),
+      tableLabel: order.tableLabel,
+      before: { status: prev },
+      after: { status },
     });
     this.gateway.emitOrderUpdated(order);
     return order;
@@ -119,9 +178,19 @@ export class ManagerService {
     });
   }
 
-  async updateTableStatus(tableId: string, status: TableStatus) {
+  async updateTableStatus(tableId: string, status: TableStatus, managerId?: string) {
+    const prev = await this.tableModel.findById(tableId).lean();
     const table = await this.tableModel.findByIdAndUpdate(tableId, { status }, { new: true }).lean();
     if (!table) throw new NotFoundException('Table not found');
+    if (managerId) {
+      this._audit({
+        managerId,
+        action: ManagerActionType.TABLE_STATUS_CHANGE,
+        tableLabel: table.label,
+        before: { status: prev?.status },
+        after: { status },
+      });
+    }
     return table;
   }
 
@@ -168,6 +237,18 @@ export class ManagerService {
         total: order.total,
       },
     );
+    this._audit({
+      managerId,
+      action: ManagerActionType.APPLY_DISCOUNT,
+      orderId: new Types.ObjectId(orderId),
+      tableLabel: order.tableLabel,
+      after: {
+        discountPercent,
+        discountAmount: order.discountAmount,
+        total: order.total,
+      },
+      reason,
+    });
     this.gateway.emitOrderUpdated(order);
     return order;
   }
@@ -200,6 +281,12 @@ export class ManagerService {
     const order = await this._withVersionedOrder(orderId, expectedVersion, (o) => {
       o.auditLog.push({ action: 'PRIORITIZED', by: managerId, at: new Date() });
     });
+    this._audit({
+      managerId,
+      action: ManagerActionType.PRIORITIZE,
+      orderId: new Types.ObjectId(orderId),
+      tableLabel: order.tableLabel,
+    });
     this.gateway.emitOrderUpdated(order);
     return order;
   }
@@ -215,7 +302,15 @@ export class ManagerService {
     const item = await this.ingredientModel.findById(ingredientId);
     if (!item) throw new NotFoundException('Ingredient not found');
     item.stockLog.push({ delta: 0, reason: `SHORTAGE_REPORTED: ${note}`, by: managerId, at: new Date() });
-    return item.save();
+    const saved = await item.save();
+    this._audit({
+      managerId,
+      action: ManagerActionType.REPORT_SHORTAGE,
+      ingredientId: new Types.ObjectId(ingredientId),
+      reason: note,
+      after: { currentStock: item.currentStock },
+    });
+    return saved;
   }
 
   // ── Reports ────────────────────────────────────────────────────────────────
@@ -331,6 +426,14 @@ export class ManagerService {
     entry.meta = { ...entry.meta, resolved: true, resolvedBy: managerId, resolvedAt: new Date(), resolution };
     order.markModified('auditLog');
     await order.save();
+    this._audit({
+      managerId,
+      action: ManagerActionType.RESOLVE_COMPLAINT,
+      orderId: new Types.ObjectId(orderId),
+      tableLabel: order.tableLabel,
+      reason: resolution,
+      after: { complaintId },
+    });
     return { resolved: true, complaintId };
   }
 

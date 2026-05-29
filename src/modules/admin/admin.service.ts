@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as bcrypt from 'bcryptjs';
@@ -6,6 +6,10 @@ import { Order, OrderDocument, OrderStatus } from '../orders/order.schema';
 import { Bill, BillDocument } from '../billing/bill.schema';
 import { User, UserDocument } from '../users/user.schema';
 import { Ingredient, IngredientDocument } from '../inventory/ingredient.schema';
+import {
+  PAYMENT_GATEWAY,
+  PaymentGateway,
+} from '../billing/payment-gateway/payment-gateway.interface';
 
 @Injectable()
 export class AdminService {
@@ -14,6 +18,7 @@ export class AdminService {
     @InjectModel(Bill.name) private billModel: Model<BillDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Ingredient.name) private ingredientModel: Model<IngredientDocument>,
+    @Inject(PAYMENT_GATEWAY) private paymentGateway: PaymentGateway,
   ) {}
 
   // ── Audit Log: flatten order auditLog[] entries in date range ─────────────
@@ -122,9 +127,23 @@ export class AdminService {
     if (!bill.isPaid) throw new BadRequestException('Bill is not paid');
     if ((bill as any).isRefunded) throw new BadRequestException('Already refunded');
 
+    // Hit the configured PSP first. If this fails we DO NOT mark the bill
+    // as refunded — that would orphan the money on the customer's card.
+    // chargeId is the PSP charge stored when the bill was captured;
+    // empty string is fine for cash bills (NoopGateway short-circuits).
+    const chargeId = (bill as any).paymentChargeId ?? '';
+    const psp = await this.paymentGateway.refund(
+      chargeId,
+      bill.total,
+      `Bill ${bill._id.toString()} admin-initiated refund`,
+    );
+
     (bill as any).isRefunded = true;
     (bill as any).refundedAt = new Date();
     (bill as any).refundedBy = adminId.toString();
+    (bill as any).refundId = psp.refundId;
+    (bill as any).refundProvider = psp.provider;
+    (bill as any).refundStatus = psp.status;
     await bill.save();
 
     if ((bill as any).orderId) {
@@ -136,7 +155,13 @@ export class AdminService {
           action: 'REFUND_PROCESSED',
           by: adminId.toString(),
           at: new Date(),
-          meta: { previousStatus: prev, billId: bill._id.toString(), refundAmount: bill.total },
+          meta: {
+            previousStatus: prev,
+            billId: bill._id.toString(),
+            refundAmount: bill.total,
+            refundId: psp.refundId,
+            provider: psp.provider,
+          },
         });
         await order.save();
       }

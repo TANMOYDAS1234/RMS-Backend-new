@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Patch, Body, Param, Request,
+  Controller, Get, Post, Patch, Body, Param, Query, Request,
   UseGuards, NotFoundException, BadRequestException,
 } from '@nestjs/common';
 import { IsEnum, IsString, IsNumber, IsOptional, IsInt, Min, Max } from 'class-validator';
@@ -10,6 +10,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { TableStatus } from '../tables/table.schema';
 import { OrderStatus } from '../orders/order.schema';
+import { ManagerActionType } from './manager-action-log.schema';
 
 class UpdateTableStatusDto {
   @IsEnum(TableStatus) status: TableStatus;
@@ -87,8 +88,12 @@ export class ManagerController {
   getTables() { return this.managerService.getTablesWithOccupancy(); }
 
   @Patch('tables/:id/status')
-  updateTableStatus(@Param('id') id: string, @Body() dto: UpdateTableStatusDto) {
-    return this.managerService.updateTableStatus(id, dto.status);
+  updateTableStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateTableStatusDto,
+    @Request() req: any,
+  ) {
+    return this.managerService.updateTableStatus(id, dto.status, req.user?._id);
   }
 
   // ── Staff ──────────────────────────────────────────────────────────────────
@@ -134,5 +139,22 @@ export class ManagerController {
   @Patch('complaints/resolve')
   resolveComplaint(@Body() dto: ResolveComplaintDto, @Request() req: any) {
     return this.managerService.resolveComplaint(dto.orderId, dto.complaintId, req.user._id, dto.resolution);
+  }
+
+  // ── Manager Action Log (durable audit trail) ───────────────────────────────
+  @Get('action-log')
+  listActions(
+    @Query('managerId') managerId?: string,
+    @Query('action') action?: string,
+    @Query('skip') skip?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const s = skip ? parseInt(skip, 10) : 0;
+    const l = limit ? parseInt(limit, 10) : 100;
+    const validAction =
+      action && (Object.values(ManagerActionType) as string[]).includes(action)
+        ? (action as ManagerActionType)
+        : undefined;
+    return this.managerService.listActions(managerId, validAction, s, l);
   }
 }

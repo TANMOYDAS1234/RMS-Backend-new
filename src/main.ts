@@ -4,7 +4,12 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { join } from 'path';
 import * as fs from 'fs';
+import { initSentry } from './common/observability/sentry.bootstrap';
 import { AppModule } from './app.module';
+
+// Sentry must be initialized before the Nest app boots so the SDK can hook
+// into Node's uncaughtException / unhandledRejection.
+initSentry();
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
