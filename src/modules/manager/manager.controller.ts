@@ -1,14 +1,15 @@
 import {
   Controller, Get, Post, Patch, Body, Param, Request,
-  UseGuards, NotFoundException,
+  UseGuards, NotFoundException, BadRequestException,
 } from '@nestjs/common';
-import { IsEnum, IsString, IsNumber, IsOptional, Min, Max } from 'class-validator';
+import { IsEnum, IsString, IsNumber, IsOptional, IsInt, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ManagerService } from './manager.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { TableStatus } from '../tables/table.schema';
+import { OrderStatus } from '../orders/order.schema';
 
 class UpdateTableStatusDto {
   @IsEnum(TableStatus) status: TableStatus;
@@ -17,10 +18,25 @@ class UpdateTableStatusDto {
 class ComplaintDto {
   @IsString() tableLabel: string;
   @IsString() issue: string;
+  @IsOptional() @IsString() category?: string;
+  @IsOptional() @IsString() severity?: string;
+}
+
+class ResolveComplaintDto {
+  @IsString() orderId: string;
+  @IsString() complaintId: string;
+  @IsString() resolution: string;
 }
 
 class ShortageDto {
   @IsString() note: string;
+}
+
+class OrderActionDto {
+  @IsOptional() @IsEnum(OrderStatus) status?: OrderStatus;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(100) discountPercent?: number;
+  @IsOptional() @IsString() reason?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) expectedVersion?: number;
 }
 
 @Controller('manager')
@@ -39,23 +55,28 @@ export class ManagerController {
   orderAction(
     @Param('action') action: string,
     @Param('id') id: string,
-    @Body() body: any,
+    @Body() body: OrderActionDto,
     @Request() req: any,
   ) {
     switch (action) {
       case 'force-close':
-        return this.managerService.forceCloseOrder(id, req.user._id);
+        return this.managerService.forceCloseOrder(id, req.user._id, body.expectedVersion);
       case 'override-status':
-        return this.managerService.overrideStatus(id, body.status, req.user._id);
+        if (!body.status) throw new BadRequestException('status is required for override-status');
+        return this.managerService.overrideStatus(id, body.status, req.user._id, body.expectedVersion);
       case 'discount':
+        if (body.discountPercent === undefined) {
+          throw new BadRequestException('discountPercent is required for discount');
+        }
         return this.managerService.applyDiscount(
           id,
-          Number(body.discountPercent ?? 0),
+          body.discountPercent,
           req.user._id,
           body.reason ?? 'Manager discount',
+          body.expectedVersion,
         );
       case 'prioritize':
-        return this.managerService.prioritizeOrder(id, req.user._id);
+        return this.managerService.prioritizeOrder(id, req.user._id, body.expectedVersion);
       default:
         throw new NotFoundException(`Unknown action: ${action}`);
     }
@@ -101,6 +122,17 @@ export class ManagerController {
 
   @Post('complaints')
   logComplaint(@Body() dto: ComplaintDto, @Request() req: any) {
-    return this.managerService.logComplaint(dto.tableLabel, dto.issue, req.user._id);
+    return this.managerService.logComplaint(
+      dto.tableLabel,
+      dto.issue,
+      req.user._id,
+      dto.category,
+      dto.severity,
+    );
+  }
+
+  @Patch('complaints/resolve')
+  resolveComplaint(@Body() dto: ResolveComplaintDto, @Request() req: any) {
+    return this.managerService.resolveComplaint(dto.orderId, dto.complaintId, req.user._id, dto.resolution);
   }
 }

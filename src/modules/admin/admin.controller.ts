@@ -20,10 +20,14 @@ export class AdminController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('action') action?: string,
+    @Query('skip') skip?: string,
+    @Query('limit') limit?: string,
   ) {
     const f = from ? new Date(from) : new Date(Date.now() - 7 * 86400000);
     const t = to ? new Date(to) : new Date();
-    return this.adminService.getAuditLog(f, t, action);
+    const s = skip ? parseInt(skip, 10) : 0;
+    const l = limit ? parseInt(limit, 10) : 100;
+    return this.adminService.getAuditLog(f, t, action, s, l);
   }
 
   // ── Password Reset ─────────────────────────────────────────────────────────

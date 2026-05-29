@@ -17,14 +17,16 @@ export class AdminService {
   ) {}
 
   // ── Audit Log: flatten order auditLog[] entries in date range ─────────────
-  async getAuditLog(from: Date, to: Date, action?: string) {
-    const match: any = { 'auditLog.at': { $gte: from, $lte: to } };
-    if (action) match['auditLog.action'] = action;
+  async getAuditLog(from: Date, to: Date, action?: string, skip = 0, limit = 100) {
+    const safeLimit = Math.min(Math.max(limit, 1), 500);
+    const safeSkip = Math.max(skip, 0);
+    const matchAudit: any = { 'auditLog.at': { $gte: from, $lte: to } };
+    if (action) matchAudit['auditLog.action'] = action;
 
-    return this.orderModel.aggregate([
+    const pipeline: any[] = [
       { $match: { createdAt: { $gte: from, $lte: to } } },
       { $unwind: '$auditLog' },
-      { $match: { 'auditLog.at': { $gte: from, $lte: to }, ...(action ? { 'auditLog.action': action } : {}) } },
+      { $match: matchAudit },
       {
         $project: {
           orderId: '$_id',
@@ -36,8 +38,21 @@ export class AdminService {
         },
       },
       { $sort: { at: -1 } },
-      { $limit: 500 },
-    ]);
+      {
+        $facet: {
+          items: [{ $skip: safeSkip }, { $limit: safeLimit }],
+          totalCount: [{ $count: 'count' }],
+        },
+      },
+    ];
+
+    const [result] = await this.orderModel.aggregate(pipeline);
+    return {
+      items: result?.items ?? [],
+      total: result?.totalCount?.[0]?.count ?? 0,
+      skip: safeSkip,
+      limit: safeLimit,
+    };
   }
 
   // ── Password Reset ─────────────────────────────────────────────────────────
@@ -110,7 +125,23 @@ export class AdminService {
     (bill as any).isRefunded = true;
     (bill as any).refundedAt = new Date();
     (bill as any).refundedBy = adminId.toString();
-    return bill.save();
+    await bill.save();
+
+    if ((bill as any).orderId) {
+      const order = await this.orderModel.findById((bill as any).orderId);
+      if (order && order.status !== OrderStatus.CLOSED) {
+        const prev = order.status;
+        order.status = OrderStatus.CLOSED;
+        order.auditLog.push({
+          action: 'REFUND_PROCESSED',
+          by: adminId.toString(),
+          at: new Date(),
+          meta: { previousStatus: prev, billId: bill._id.toString(), refundAmount: bill.total },
+        });
+        await order.save();
+      }
+    }
+    return bill;
   }
 
   // ── Profit Margin ──────────────────────────────────────────────────────────
@@ -157,8 +188,9 @@ export class AdminService {
     if (!order) throw new NotFoundException('Order not found');
     if (order.status === OrderStatus.CLOSED) throw new BadRequestException('Already closed');
 
+    const prev = order.status;
     order.status = OrderStatus.CLOSED;
-    order.auditLog.push({ action: 'FORCE_CLOSED', by: adminId.toString(), at: new Date(), meta: { previousStatus: order.status } });
+    order.auditLog.push({ action: 'FORCE_CLOSED', by: adminId.toString(), at: new Date(), meta: { previousStatus: prev } });
     return order.save();
   }
 

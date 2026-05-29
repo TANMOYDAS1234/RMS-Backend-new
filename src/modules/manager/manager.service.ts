@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Inject } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Order, OrderDocument, OrderStatus } from '../orders/order.schema';
@@ -55,27 +55,54 @@ export class ManagerService {
     };
   }
 
-  // ── Force-close order (manager override) ───────────────────────────────────
-  async forceCloseOrder(orderId: string, managerId: string) {
+  // ── Optimistic-lock helper: load order, mutate, save with version check ────
+  private async _withVersionedOrder(
+    orderId: string,
+    expectedVersion: number | undefined,
+    mutate: (order: OrderDocument) => void | Promise<void>,
+  ): Promise<OrderDocument> {
     const order = await this.orderModel.findById(orderId);
     if (!order) throw new NotFoundException('Order not found');
-    if (order.status === OrderStatus.CLOSED) throw new BadRequestException('Already closed');
-    const prev = order.status;
-    order.status = OrderStatus.CLOSED;
-    order.auditLog.push({ action: 'FORCE_CLOSED_MANAGER', by: managerId, at: new Date(), meta: { previousStatus: prev } });
-    await order.save();
+    if (expectedVersion !== undefined && order.version !== expectedVersion) {
+      throw new ConflictException(
+        `Version mismatch: expected ${expectedVersion}, got ${order.version}. Refresh and try again.`,
+      );
+    }
+    await mutate(order);
+    order.version += 1;
+    try {
+      await order.save();
+    } catch (e: any) {
+      if (e?.name === 'VersionError') {
+        throw new ConflictException('Concurrent update detected. Refresh and try again.');
+      }
+      throw e;
+    }
+    return order;
+  }
+
+  // ── Force-close order (manager override) ───────────────────────────────────
+  async forceCloseOrder(orderId: string, managerId: string, expectedVersion?: number) {
+    const order = await this._withVersionedOrder(orderId, expectedVersion, (o) => {
+      if (o.status === OrderStatus.CLOSED) throw new BadRequestException('Already closed');
+      const prev = o.status;
+      o.status = OrderStatus.CLOSED;
+      o.auditLog.push({ action: 'FORCE_CLOSED_MANAGER', by: managerId, at: new Date(), meta: { previousStatus: prev } });
+    });
     this.gateway.emitOrderUpdated(order);
     return order;
   }
 
   // ── Override order status ───────────────────────────────────────────────────
-  async overrideStatus(orderId: string, status: OrderStatus, managerId: string) {
-    const order = await this.orderModel.findById(orderId);
-    if (!order) throw new NotFoundException('Order not found');
-    const prev = order.status;
-    order.status = status;
-    order.auditLog.push({ action: 'STATUS_OVERRIDE', by: managerId, at: new Date(), meta: { from: prev, to: status } });
-    await order.save();
+  async overrideStatus(orderId: string, status: OrderStatus, managerId: string, expectedVersion?: number) {
+    if (!Object.values(OrderStatus).includes(status)) {
+      throw new BadRequestException(`Invalid status: ${status}`);
+    }
+    const order = await this._withVersionedOrder(orderId, expectedVersion, (o) => {
+      const prev = o.status;
+      o.status = status;
+      o.auditLog.push({ action: 'STATUS_OVERRIDE', by: managerId, at: new Date(), meta: { from: prev, to: status } });
+    });
     this.gateway.emitOrderUpdated(order);
     return order;
   }
@@ -112,26 +139,36 @@ export class ManagerService {
   }
 
   // ── Discount approval ──────────────────────────────────────────────────────
-  async applyDiscount(orderId: string, discountPercent: number, managerId: string, reason: string) {
-    if (discountPercent < 0 || discountPercent > 100) throw new BadRequestException('Invalid discount');
-    const order = await this.orderModel.findById(orderId);
-    if (!order) throw new NotFoundException('Order not found');
+  async applyDiscount(
+    orderId: string,
+    discountPercent: number,
+    managerId: string,
+    reason: string,
+    expectedVersion?: number,
+  ) {
+    if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) {
+      throw new BadRequestException('Invalid discount');
+    }
+    const order = await this._withVersionedOrder(orderId, expectedVersion, (o) => {
+      const discountAmount = +(o.subtotal * (discountPercent / 100)).toFixed(2);
+      const gstAmount = +((o.subtotal - discountAmount) * 0.18).toFixed(2);
+      const total = +(o.subtotal - discountAmount + gstAmount).toFixed(2);
+      o.discountAmount = discountAmount;
+      o.gstAmount = gstAmount;
+      o.total = total;
+      o.auditLog.push({ action: 'DISCOUNT_APPLIED', by: managerId, at: new Date(), meta: { discountPercent, reason } });
+    });
 
-    const discountAmount = +(order.subtotal * (discountPercent / 100)).toFixed(2);
-    const gstAmount = +((order.subtotal - discountAmount) * 0.18).toFixed(2);
-    const total = +(order.subtotal - discountAmount + gstAmount).toFixed(2);
-
-    order.discountAmount = discountAmount;
-    order.gstAmount = gstAmount;
-    order.total = total;
-    order.auditLog.push({ action: 'DISCOUNT_APPLIED', by: managerId, at: new Date(), meta: { discountPercent, reason } });
-    await order.save();
-
-    // Also update bill if exists
     await this.billModel.findOneAndUpdate(
       { orderId: order._id },
-      { discountAmount, discountPercent, gstAmount, total },
+      {
+        discountAmount: order.discountAmount,
+        discountPercent,
+        gstAmount: order.gstAmount,
+        total: order.total,
+      },
     );
+    this.gateway.emitOrderUpdated(order);
     return order;
   }
 
@@ -159,11 +196,10 @@ export class ManagerService {
   }
 
   // ── Prioritize order (move to top of kitchen queue via audit) ──────────────
-  async prioritizeOrder(orderId: string, managerId: string) {
-    const order = await this.orderModel.findById(orderId);
-    if (!order) throw new NotFoundException('Order not found');
-    order.auditLog.push({ action: 'PRIORITIZED', by: managerId, at: new Date() });
-    await order.save();
+  async prioritizeOrder(orderId: string, managerId: string, expectedVersion?: number) {
+    const order = await this._withVersionedOrder(orderId, expectedVersion, (o) => {
+      o.auditLog.push({ action: 'PRIORITIZED', by: managerId, at: new Date() });
+    });
     this.gateway.emitOrderUpdated(order);
     return order;
   }
@@ -189,8 +225,32 @@ export class ManagerService {
       this.orderModel.find({ createdAt: { $gte: today } }).lean(),
       this.billModel.find({ createdAt: { $gte: today } }).lean(),
       this.orderModel.aggregate([
-        { $match: { createdAt: { $gte: today }, waiterId: { $exists: true } } },
+        { $match: { createdAt: { $gte: today }, waiterId: { $exists: true, $ne: null } } },
         { $group: { _id: '$waiterId', count: { $sum: 1 }, revenue: { $sum: '$total' } } },
+        {
+          $addFields: {
+            waiterObjId: {
+              $convert: { input: '$_id', to: 'objectId', onError: null, onNull: null },
+            },
+          },
+        },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'waiterObjId',
+            foreignField: '_id',
+            as: 'waiter',
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            count: 1,
+            revenue: 1,
+            name: { $ifNull: [{ $arrayElemAt: ['$waiter.name', 0] }, 'Unknown'] },
+            role: { $ifNull: [{ $arrayElemAt: ['$waiter.role', 0] }, ''] },
+          },
+        },
         { $sort: { count: -1 } },
       ]),
     ]);
@@ -217,24 +277,61 @@ export class ManagerService {
   }
 
   // ── Customer complaints log ────────────────────────────────────────────────
-  async logComplaint(tableLabel: string, issue: string, managerId: string) {
-    // Store as audit entry on the most recent order for that table
+  async logComplaint(
+    tableLabel: string,
+    issue: string,
+    managerId: string,
+    category?: string,
+    severity?: string,
+  ) {
     const order = await this.orderModel.findOne({ tableLabel }).sort({ createdAt: -1 });
-    if (order) {
-      order.auditLog.push({ action: 'COMPLAINT_LOGGED', by: managerId, at: new Date(), meta: { issue } });
-      await order.save();
+    if (!order) {
+      throw new NotFoundException(`No order found for table ${tableLabel}`);
     }
-    return { logged: true, tableLabel, issue };
+    const complaintId = new Date().getTime().toString();
+    order.auditLog.push({
+      action: 'COMPLAINT_LOGGED',
+      by: managerId,
+      at: new Date(),
+      meta: { complaintId, issue, category: category ?? 'general', severity: severity ?? 'medium', resolved: false },
+    });
+    await order.save();
+    return { logged: true, tableLabel, issue, complaintId, orderId: order._id };
   }
 
   async getComplaints() {
     return this.orderModel.aggregate([
       { $unwind: '$auditLog' },
       { $match: { 'auditLog.action': 'COMPLAINT_LOGGED' } },
-      { $project: { tableLabel: 1, issue: '$auditLog.meta.issue', by: '$auditLog.by', at: '$auditLog.at' } },
+      {
+        $project: {
+          orderId: '$_id',
+          tableLabel: 1,
+          complaintId: '$auditLog.meta.complaintId',
+          issue: '$auditLog.meta.issue',
+          category: { $ifNull: ['$auditLog.meta.category', 'general'] },
+          severity: { $ifNull: ['$auditLog.meta.severity', 'medium'] },
+          resolved: { $ifNull: ['$auditLog.meta.resolved', false] },
+          by: '$auditLog.by',
+          at: '$auditLog.at',
+        },
+      },
       { $sort: { at: -1 } },
-      { $limit: 100 },
+      { $limit: 200 },
     ]);
+  }
+
+  async resolveComplaint(orderId: string, complaintId: string, managerId: string, resolution: string) {
+    const order = await this.orderModel.findById(orderId);
+    if (!order) throw new NotFoundException('Order not found');
+    const entry = order.auditLog.find(
+      (e: any) => e.action === 'COMPLAINT_LOGGED' && e.meta?.complaintId === complaintId,
+    ) as any;
+    if (!entry) throw new NotFoundException('Complaint not found');
+    entry.meta = { ...entry.meta, resolved: true, resolvedBy: managerId, resolvedAt: new Date(), resolution };
+    order.markModified('auditLog');
+    await order.save();
+    return { resolved: true, complaintId };
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
