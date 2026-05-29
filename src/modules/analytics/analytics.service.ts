@@ -28,9 +28,15 @@ export class AnalyticsService {
     ]);
   }
 
-  async getPeakHours() {
+  async getPeakHours(from?: Date, to?: Date) {
+    const match: any = { status: { $in: [OrderStatus.PAID, OrderStatus.CLOSED] } };
+    if (from || to) {
+      match.createdAt = {};
+      if (from) match.createdAt.$gte = from;
+      if (to) match.createdAt.$lte = to;
+    }
     return this.orderModel.aggregate([
-      { $match: { status: { $in: [OrderStatus.PAID, OrderStatus.CLOSED] } } },
+      { $match: match },
       {
         $group: {
           _id: { $hour: '$createdAt' },
@@ -62,8 +68,15 @@ export class AnalyticsService {
     ]);
   }
 
-  async getTopItems(limit = 10) {
-    return this.orderModel.aggregate([
+  async getTopItems(limit = 10, from?: Date, to?: Date) {
+    const pipeline: any[] = [];
+    if (from || to) {
+      const match: any = { createdAt: {} };
+      if (from) match.createdAt.$gte = from;
+      if (to) match.createdAt.$lte = to;
+      pipeline.push({ $match: match });
+    }
+    pipeline.push(
       { $unwind: '$items' },
       {
         $group: {
@@ -74,8 +87,9 @@ export class AnalyticsService {
         },
       },
       { $sort: { totalQty: -1 } },
-      { $limit: limit },
-    ]);
+      { $limit: Math.max(1, Math.min(limit, 100)) },
+    );
+    return this.orderModel.aggregate(pipeline);
   }
 
   async getStaffPerformance(from: Date, to: Date) {

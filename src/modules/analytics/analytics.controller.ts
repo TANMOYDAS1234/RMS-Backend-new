@@ -21,7 +21,11 @@ export class AnalyticsController {
   }
 
   @Get('peak-hours')
-  getPeakHours() { return this.analyticsService.getPeakHours(); }
+  getPeakHours(@Query('from') from?: string, @Query('to') to?: string) {
+    const f = from ? new Date(from) : undefined;
+    const t = to ? new Date(to) : undefined;
+    return this.analyticsService.getPeakHours(f, t);
+  }
 
   @Get('table-turnover')
   getTableTurnover(@Query('from') from: string, @Query('to') to: string) {
@@ -31,8 +35,15 @@ export class AnalyticsController {
   }
 
   @Get('top-items')
-  getTopItems(@Query('limit') limit: string) {
-    return this.analyticsService.getTopItems(limit ? parseInt(limit) : 10);
+  getTopItems(
+    @Query('limit') limit?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    const l = limit ? parseInt(limit, 10) : 10;
+    const f = from ? new Date(from) : undefined;
+    const t = to ? new Date(to) : undefined;
+    return this.analyticsService.getTopItems(l, f, t);
   }
 
   @Get('staff-performance')
