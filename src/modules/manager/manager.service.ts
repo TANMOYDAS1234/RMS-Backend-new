@@ -81,7 +81,7 @@ export class ManagerService {
   }
 
   // ── Tables: full list with occupancy ───────────────────────────────────────
-  async getTablesWithOccupancy() {
+  async getTablesWithOccupancy(): Promise<any[]> {
     const [tables, activeOrders] = await Promise.all([
       this.tableModel.find().lean(),
       this.orderModel.find({ status: { $nin: [OrderStatus.CLOSED, OrderStatus.PAID] } }).lean(),
@@ -99,7 +99,7 @@ export class ManagerService {
   }
 
   // ── Staff: list with today's order count ───────────────────────────────────
-  async getStaffWithActivity() {
+  async getStaffWithActivity(): Promise<any[]> {
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const [staff, orders] = await Promise.all([
       this.userModel.find({ role: { $in: ['waiter', 'chef', 'cashier', 'manager'] } }).select('-password').lean(),

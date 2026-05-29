@@ -3,7 +3,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
-export type OrderDocument = Order & Document;
+export type OrderDocument = Order & Document & { createdAt: Date; updatedAt: Date };
 
 export enum OrderStatus {
   CREATED = 'created',
