@@ -26,22 +26,30 @@ class UpdateUserDto {
   @IsOptional() @IsString() branchId?: string;
 }
 
+const photoInterceptor = () => FileInterceptor('photo', {
+  storage: memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_, file, cb) => {
+    if (!file.mimetype.match(/^image\//)) return cb(new BadRequestException('Images only'), false);
+    cb(null, true);
+  },
+});
+
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
+  // ── List / Create ──────────────────────────────────────────────────────────
   @Get()
   @Roles('admin', 'manager')
   findAll() { return this.usersService.findAll(); }
 
-  @Get(':id')
-  @Roles('admin', 'manager')
-  findOne(@Param('id') id: string) { return this.usersService.findById(id); }
-
   @Post()
   @Roles('admin')
   create(@Body() dto: CreateUserDto) { return this.usersService.create(dto); }
+
+  // ── /me routes MUST come before /:id to avoid param collision ─────────────
 
   @Patch('me/fcm-token')
   @Roles('admin', 'manager', 'waiter', 'chef', 'cashier')
@@ -49,35 +57,29 @@ export class UsersController {
     return this.usersService.update(req.user._id, { fcmToken });
   }
 
-  @Patch(':id')
-  @Roles('admin')
-  update(@Param('id') id: string, @Body() dto: UpdateUserDto) { return this.usersService.update(id, dto); }
-
   @Post('me/photo')
   @Roles('admin', 'manager', 'waiter', 'chef', 'cashier')
-  @UseInterceptors(FileInterceptor('photo', {
-    storage: memoryStorage(),
-    limits: { fileSize: 5 * 1024 * 1024 },
-    fileFilter: (_, file, cb) => {
-      if (!file.mimetype.match(/^image\//)) return cb(new BadRequestException('Images only'), false);
-      cb(null, true);
-    },
-  }))
+  @UseInterceptors(photoInterceptor())
   uploadOwnPhoto(@Request() req: any, @UploadedFile() file: Express.Multer.File) {
     if (!file) throw new BadRequestException('No file uploaded');
     return this.usersService.uploadPhoto(req.user._id, file);
   }
 
+  // ── /:id routes ────────────────────────────────────────────────────────────
+
+  @Get(':id')
+  @Roles('admin', 'manager')
+  findOne(@Param('id') id: string) { return this.usersService.findById(id); }
+
+  @Patch(':id')
+  @Roles('admin')
+  update(@Param('id') id: string, @Body() dto: UpdateUserDto) {
+    return this.usersService.update(id, dto);
+  }
+
   @Post(':id/photo')
   @Roles('admin')
-  @UseInterceptors(FileInterceptor('photo', {
-    storage: memoryStorage(),
-    limits: { fileSize: 5 * 1024 * 1024 },
-    fileFilter: (_, file, cb) => {
-      if (!file.mimetype.match(/^image\//)) return cb(new BadRequestException('Images only'), false);
-      cb(null, true);
-    },
-  }))
+  @UseInterceptors(photoInterceptor())
   uploadPhoto(@Param('id') id: string, @UploadedFile() file: Express.Multer.File) {
     if (!file) throw new BadRequestException('No file uploaded');
     return this.usersService.uploadPhoto(id, file);
@@ -89,7 +91,15 @@ export class UsersController {
     if (!user?.photoData) return res.status(404).send('Not found');
     const buf = Buffer.from(user.photoData, 'base64');
     res.set('Content-Type', user.photoMime || 'image/jpeg');
-    res.set('Cache-Control', 'public, max-age=86400');
+    // Stable URL per user (/users/:id/photo) means uploads silently get
+    // served stale unless callers append ?v=<updatedAt> AND intermediaries
+    // honor query strings as cache keys. Belt-and-braces: ETag varies with
+    // updatedAt so a 304 only returns when the doc actually matches, and
+    // a short max-age means even uncached clients refetch fast.
+    if ((user as any).updatedAt) {
+      res.set('ETag', `"${new Date((user as any).updatedAt).getTime()}"`);
+    }
+    res.set('Cache-Control', 'private, max-age=60, must-revalidate');
     return res.send(buf);
   }
 

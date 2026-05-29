@@ -26,7 +26,17 @@ export class AuthService {
     const payload = { sub: user._id, email: user.email, role: user.role };
     return {
       accessToken: this.jwtService.sign(payload),
-      user: { id: user._id, name: user.name, email: user.email, role: user.role, photoUrl: user.photoUrl, branchId: user.branchId ?? null },
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        photoUrl: user.photoUrl,
+        branchId: user.branchId ?? null,
+        // Mongoose `timestamps: true` sets this; clients use it as the
+        // cache-buster query param when displaying the avatar.
+        updatedAt: (user as any).updatedAt,
+      },
     };
   }
 
