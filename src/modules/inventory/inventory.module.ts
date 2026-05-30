@@ -4,6 +4,7 @@ import { Ingredient, IngredientSchema } from './ingredient.schema';
 import { User, UserSchema } from '../users/user.schema';
 import { InventoryService } from './inventory.service';
 import { InventoryController } from './inventory.controller';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -11,6 +12,7 @@ import { InventoryController } from './inventory.controller';
       { name: Ingredient.name, schema: IngredientSchema },
       { name: User.name, schema: UserSchema },
     ]),
+    NotificationsModule,
   ],
   controllers: [InventoryController],
   providers: [InventoryService],

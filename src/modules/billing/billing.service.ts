@@ -4,12 +4,14 @@ import { Model, Types } from 'mongoose';
 import { Bill, BillDocument, PaymentMethod } from './bill.schema';
 import { OrdersService } from '../orders/orders.service';
 import { OrderStatus } from '../orders/order.schema';
+import { NotificationsService, NotificationType } from '../notifications/notifications.service';
 
 @Injectable()
 export class BillingService {
   constructor(
     @InjectModel(Bill.name) private billModel: Model<BillDocument>,
     private ordersService: OrdersService,
+    private notifications: NotificationsService,
   ) {}
 
   async generateBill(orderId: string, discountPercent = 0) {
@@ -27,6 +29,9 @@ export class BillingService {
     return this.billModel.create({
       orderId: new Types.ObjectId(orderId),
       tableLabel: (order as any).tableLabel,
+      // Stamp branchId so multi-tenant queries (including the FCM target
+      // computation below) can filter without a join back to the order.
+      branchId: (order as any).branchId,
       subtotal,
       discountAmount,
       discountPercent,
@@ -58,7 +63,30 @@ export class BillingService {
     if (splitPayments?.length) bill.splitPayments = splitPayments as any;
     if (idempotencyKey) bill.processedKeys.push(idempotencyKey);
 
-    return bill.save();
+    const saved = await bill.save();
+
+    // Notify managers (and any admin) that the books moved. Branch-scoped
+    // so a multi-branch operator only wakes up for their own takings.
+    if ((saved as any).branchId) {
+      this.notifications.send(
+        { roles: ['manager', 'admin'], branchId: (saved as any).branchId },
+        {
+          type: NotificationType.PAYMENT_RECEIVED,
+          title: 'Payment received',
+          body: `${saved.tableLabel} — ₹${saved.total.toFixed(0)} via ${paymentMethod}`,
+          data: {
+            billId: saved._id.toString(),
+            orderId: saved.orderId.toString(),
+            tableLabel: saved.tableLabel,
+            branchId: (saved as any).branchId,
+            amount: saved.total.toString(),
+            method: paymentMethod,
+          },
+        },
+      );
+    }
+
+    return saved;
   }
 
   async findByOrder(orderId: string) {

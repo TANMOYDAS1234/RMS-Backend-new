@@ -18,6 +18,7 @@ import { OrdersGateway } from '../../gateways/orders.gateway';
 import { TablesService } from '../tables/tables.service';
 import { BranchesService } from '../branches/branches.service';
 import { SessionsService } from '../sessions/sessions.service';
+import { NotificationsService, NotificationType } from '../notifications/notifications.service';
 import {
   AuthUser,
   assertOwnsBranch,
@@ -46,6 +47,7 @@ export class OrdersService {
     private readonly branchesService: BranchesService,
     @Inject(forwardRef(() => SessionsService))
     private readonly sessionsService: SessionsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /** Compute subtotal + GST + total using the branch's configured rate. */
@@ -98,6 +100,7 @@ export class OrdersService {
     });
 
     this.gateway.emitOrderCreated(order);
+    this._notifyOrderCreated(order, dto.tableLabel, branchId);
     return order;
   }
 
@@ -154,7 +157,26 @@ export class OrdersService {
     await this.sessionsService.addOrder(session._id.toString(), order._id.toString());
 
     this.gateway.emitOrderCreated(order);
+    this._notifyOrderCreated(order, session.tableLabel, session.branchId);
     return order;
+  }
+
+  /** Push notify chefs in the order's branch that a new order arrived. */
+  private _notifyOrderCreated(order: any, tableLabel: string, branchId: string) {
+    this.notifications.send(
+      { roles: ['chef'], branchId },
+      {
+        type: NotificationType.ORDER_CREATED,
+        title: 'New order',
+        body: `${tableLabel} — ${order.items?.length ?? 0} item(s)`,
+        data: {
+          orderId: order._id.toString(),
+          tableId: order.tableId,
+          tableLabel,
+          branchId,
+        },
+      },
+    );
   }
 
   async getActiveOrders(user?: AuthUser): Promise<Order[]> {
@@ -223,12 +245,55 @@ export class OrdersService {
       await session.commitTransaction();
 
       this.gateway.emitOrderUpdated(order);
+      this._notifyStatusTransition(order);
       return order;
     } catch (err) {
       await session.abortTransaction();
       throw err;
     } finally {
       session.endSession();
+    }
+  }
+
+  /**
+   * Route a state-change to the role that needs to act next. READY → waiter
+   * goes to pick up; SERVED → cashier prepares the bill. The branch scope
+   * comes from the order itself so a busy multi-branch operator's chefs in
+   * one location don't get woken up by another location's prep.
+   */
+  private _notifyStatusTransition(order: any) {
+    const branchId = order.branchId;
+    if (!branchId) return;
+    if (order.status === OrderStatus.READY) {
+      this.notifications.send(
+        { roles: ['waiter'], branchId },
+        {
+          type: NotificationType.ORDER_READY,
+          title: 'Order ready to serve',
+          body: `${order.tableLabel} — ${order.items?.length ?? 0} item(s)`,
+          data: {
+            orderId: order._id.toString(),
+            tableId: order.tableId,
+            tableLabel: order.tableLabel,
+            branchId,
+          },
+        },
+      );
+    } else if (order.status === OrderStatus.SERVED) {
+      this.notifications.send(
+        { roles: ['cashier'], branchId },
+        {
+          type: NotificationType.ORDER_SERVED,
+          title: 'Order served — ready to bill',
+          body: `${order.tableLabel} — ₹${(order.total ?? 0).toFixed(0)}`,
+          data: {
+            orderId: order._id.toString(),
+            tableId: order.tableId,
+            tableLabel: order.tableLabel,
+            branchId,
+          },
+        },
+      );
     }
   }
 

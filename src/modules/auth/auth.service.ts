@@ -23,7 +23,14 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const payload = { sub: user._id, email: user.email, role: user.role };
+    // branchId is part of the payload so the WS gateway can authorize
+    // room joins without hitting Mongo on every handshake.
+    const payload = {
+      sub: user._id,
+      email: user.email,
+      role: user.role,
+      branchId: user.branchId ?? null,
+    };
     return {
       accessToken: this.jwtService.sign(payload),
       user: {

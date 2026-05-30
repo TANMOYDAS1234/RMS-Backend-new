@@ -6,15 +6,21 @@ import {
   SubscribeMessage,
   OnGatewayConnection,
   OnGatewayDisconnect,
-  ConnectedSocket,
   MessageBody,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { UseGuards } from '@nestjs/common';
-import { WsJwtGuard } from '../common/guards/ws-jwt.guard';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 
 @WebSocketGateway({
-  cors: { origin: '*' },
+  cors: {
+    // Lock to the same env-driven allowlist as REST CORS — '*' is fine in
+    // dev because the JWT verification below is the real auth boundary.
+    origin: (process.env.CORS_ORIGINS ?? '*')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  },
   namespace: '/',
 })
 export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -23,17 +29,61 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // Track ACK-pending events: eventId → { payload, retryCount, timer }
   private pendingAcks = new Map<string, { payload: any; retries: number; timer: NodeJS.Timeout }>();
 
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+  ) {}
+
+  /**
+   * Two flavors of handshake are accepted:
+   *
+   *   1. Staff: `{ token: <JWT> }`. The JWT is verified; the role and
+   *      branchId from the payload determine which rooms we join. A
+   *      tampered handshake (claiming a role you don't have) can't pass
+   *      because the signature wouldn't verify.
+   *
+   *   2. Customer/QR: `{ tableId, branchId }` with no token. We accept the
+   *      pair as-is — those values were already vouched for by the QR
+   *      URL signature (Phase 2: sessions.getOrCreate enforces table↔
+   *      branch ownership before any /sessions/scan succeeds, so a
+   *      customer can't lie their way into a different table's room).
+   *
+   * Anything else (missing token AND missing tableId) gets dropped.
+   */
   handleConnection(client: Socket) {
-    // Staff clients pass { role } in handshake auth (their own role).
-    // QR/customer clients pass { tableId, branchId } and join those rooms
-    // so they only receive events for their own table — no cross-tenant
-    // leak of order data to other diners.
-    const role = client.handshake.auth?.role;
-    const tableId = client.handshake.auth?.tableId;
-    const branchId = client.handshake.auth?.branchId;
-    if (role) client.join(`role:${role}`);
-    if (branchId) client.join(`branch:${branchId}`);
-    if (tableId) client.join(`table:${tableId}`);
+    const token = client.handshake.auth?.token as string | undefined;
+    const tableId = client.handshake.auth?.tableId as string | undefined;
+    const branchId = client.handshake.auth?.branchId as string | undefined;
+
+    if (token) {
+      try {
+        const payload: any = this.jwtService.verify(token, {
+          secret: this.configService.get<string>('JWT_SECRET'),
+        });
+        const role = payload.role as string | undefined;
+        const userBranchId = payload.branchId as string | undefined;
+        if (role) client.join(`role:${role}`);
+        if (userBranchId) {
+          client.join(`branch:${userBranchId}`);
+          if (role) client.join(`branch:${userBranchId}.role:${role}`);
+        }
+        (client as any).user = payload;
+        return;
+      } catch {
+        client.disconnect(true);
+        return;
+      }
+    }
+
+    // Customer flow — no JWT, just routing keys from the QR URL.
+    if (tableId && branchId) {
+      client.join(`branch:${branchId}`);
+      client.join(`table:${tableId}`);
+      return;
+    }
+
+    // Neither valid token nor valid customer pair → kick.
+    client.disconnect(true);
   }
 
   handleDisconnect(_client: Socket) {

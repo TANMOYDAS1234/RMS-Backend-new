@@ -12,6 +12,8 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { resolveBranchIdForCreate, isAdmin } from '../../common/scope/branch-scope';
+import { NotificationsService } from '../notifications/notifications.service';
+import { DevicePlatform } from '../notifications/fcm-token.schema';
 
 class CreateUserDto {
   @IsString() name: string;
@@ -42,7 +44,10 @@ const photoInterceptor = () => FileInterceptor('photo', {
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   // ── List / Create ──────────────────────────────────────────────────────────
   @Get()
@@ -70,10 +75,48 @@ export class UsersController {
 
   // ── /me routes MUST come before /:id to avoid param collision ─────────────
 
+  // Register a device for push. The deviceId is the stable per-install
+  // identifier the client persists; sending the same id replaces the
+  // previous token (token rotation). Backwards-compatible: the body's
+  // `fcmToken` field is also still written to the user document, but new
+  // clients should rely on the FcmToken collection instead.
   @Patch('me/fcm-token')
   @Roles('admin', 'manager', 'waiter', 'chef', 'cashier')
-  updateFcmToken(@Request() req: any, @Body('fcmToken') fcmToken: string) {
-    return this.usersService.update(req.user._id, { fcmToken }, req.user);
+  async updateFcmToken(
+    @Request() req: any,
+    @Body() body: {
+      fcmToken: string;
+      deviceId?: string;
+      platform?: DevicePlatform;
+    },
+  ) {
+    const updated = await this.usersService.update(
+      req.user._id,
+      { fcmToken: body.fcmToken },
+      req.user,
+    );
+    // Multi-device path: only register when the client supplies a stable
+    // deviceId. Without it we can't distinguish two devices on one account.
+    if (body.deviceId) {
+      await this.notifications.register({
+        userId: req.user._id.toString(),
+        deviceId: body.deviceId,
+        token: body.fcmToken,
+        platform: body.platform,
+        branchId: req.user.branchId ?? null,
+        role: req.user.role,
+      });
+    }
+    return updated;
+  }
+
+  // Called by the client at logout so the next user on the device stops
+  // receiving the previous account's pushes.
+  @Patch('me/fcm-token/clear')
+  @Roles('admin', 'manager', 'waiter', 'chef', 'cashier')
+  async clearFcmToken(@Request() req: any) {
+    await this.notifications.clearForUser(req.user._id.toString());
+    return { cleared: true };
   }
 
   @Post('me/photo')
