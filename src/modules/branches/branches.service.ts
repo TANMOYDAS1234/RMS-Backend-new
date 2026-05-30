@@ -52,6 +52,9 @@ export class BranchesService {
 
   async isQrOrderingEnabled(branchId: string): Promise<boolean> {
     const branch = await this.findById(branchId);
+    // Soft-deleted/disabled branches are off-limits regardless of feature
+    // flag — a restaurant in 'isActive: false' shouldn't be taking orders.
+    if (!(branch as any).isActive) return false;
     if (!branch.features.qrOrdering) return false;
 
     const { qrOrderingActiveFrom, qrOrderingActiveTo } = branch.features;
@@ -61,6 +64,12 @@ export class BranchesService {
     const [fh, fm] = qrOrderingActiveFrom.split(':').map(Number);
     const [th, tm] = qrOrderingActiveTo.split(':').map(Number);
     const nowMins = now.getHours() * 60 + now.getMinutes();
-    return nowMins >= fh * 60 + fm && nowMins <= th * 60 + tm;
+    const fromMins = fh * 60 + fm;
+    const toMins = th * 60 + tm;
+    // Handle overnight windows like 22:00 → 02:00. When from > to the window
+    // wraps midnight, so "in window" means `now >= from OR now <= to`.
+    return fromMins <= toMins
+      ? nowMins >= fromMins && nowMins <= toMins
+      : nowMins >= fromMins || nowMins <= toMins;
   }
 }

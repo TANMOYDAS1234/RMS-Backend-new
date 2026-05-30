@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Request, UseGuards } from '@nestjs/common';
 import { IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 import { TablesService } from './tables.service';
 import { TableStatus } from './table.schema';
@@ -9,6 +9,8 @@ import { Roles } from '../../common/decorators/roles.decorator';
 class CreateTableDto {
   @IsString() label: string;
   @IsNumber() @Min(1) capacity: number;
+  // Admin: optional explicit branch. Manager: forced to own branch.
+  @IsOptional() @IsString() branchId?: string;
 }
 
 class UpdateTableStatusDto {
@@ -23,7 +25,7 @@ export class TablesController {
 
   @Get()
   @Roles('admin', 'manager', 'waiter', 'cashier')
-  findAll() { return this.tablesService.findAll(); }
+  findAll(@Request() req: any) { return this.tablesService.findAll(req.user); }
 
   @Get(':id')
   @Roles('admin', 'manager', 'waiter', 'cashier')
@@ -31,15 +33,19 @@ export class TablesController {
 
   @Post()
   @Roles('admin', 'manager')
-  create(@Body() dto: CreateTableDto) { return this.tablesService.create(dto); }
+  create(@Body() dto: CreateTableDto, @Request() req: any) {
+    return this.tablesService.create(dto, req.user);
+  }
 
   @Patch(':id/status')
   @Roles('admin', 'manager', 'waiter')
-  updateStatus(@Param('id') id: string, @Body() dto: UpdateTableStatusDto) {
-    return this.tablesService.updateStatus(id, dto.status, dto.activeOrderId);
+  updateStatus(@Param('id') id: string, @Body() dto: UpdateTableStatusDto, @Request() req: any) {
+    return this.tablesService.updateStatus(id, dto.status, dto.activeOrderId, req.user);
   }
 
   @Delete(':id')
-  @Roles('admin')
-  delete(@Param('id') id: string) { return this.tablesService.delete(id); }
+  @Roles('admin', 'manager')
+  delete(@Param('id') id: string, @Request() req: any) {
+    return this.tablesService.delete(id, req.user);
+  }
 }

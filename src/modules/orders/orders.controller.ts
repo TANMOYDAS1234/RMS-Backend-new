@@ -12,7 +12,9 @@ import {
   Request,
   HttpCode,
   HttpStatus,
+  BadRequestException,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
@@ -21,38 +23,60 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { RolesGuard } from '../../common/guards/roles.guard';
 
 @Controller('orders')
-@UseGuards(JwtAuthGuard, RolesGuard)
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
-  // GET /orders/active
+  // GET /orders/active — staff only
   @Get('active')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'manager', 'waiter', 'chef', 'cashier')
-  getActive() {
-    return this.ordersService.getActiveOrders();
+  getActive(@Request() req: any) {
+    return this.ordersService.getActiveOrders(req.user);
   }
 
-  // GET /orders/:id
+  // GET /orders/:id — staff only
   @Get(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'manager', 'waiter', 'chef', 'cashier')
   getById(@Param('id') id: string) {
     return this.ordersService.getById(id);
   }
 
-  // POST /orders
+  // POST /orders — staff-initiated order. Requires JWT; branchId comes from
+  // the table (which is now branch-scoped) and is asserted against the
+  // caller's branch for non-admins.
   @Post()
-  @Roles('admin', 'manager', 'waiter', 'customer')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'manager', 'waiter')
   @HttpCode(HttpStatus.CREATED)
   create(
     @Body() dto: CreateOrderDto,
     @Request() req: any,
     @Headers('idempotency-key') idempotencyKey: string,
   ) {
-    return this.ordersService.create(dto, req.user.id, idempotencyKey);
+    return this.ordersService.createForStaff(dto, req.user, idempotencyKey);
   }
 
-  // PATCH /orders/:id/status
+  // POST /orders/public — QR/customer-initiated order. No JWT; the active
+  // session vouches for the customer. The session also supplies branchId
+  // and tableId so the body can't lie about either. Throttled aggressively
+  // because this endpoint is publicly reachable.
+  @Post('public')
+  @Throttle({ medium: { limit: 20, ttl: 60_000 } })
+  @HttpCode(HttpStatus.CREATED)
+  createPublic(
+    @Body() dto: CreateOrderDto,
+    @Headers('idempotency-key') idempotencyKey: string,
+  ) {
+    if (!dto.sessionId) {
+      throw new BadRequestException('sessionId is required for public orders.');
+    }
+    return this.ordersService.createFromSession(dto, idempotencyKey);
+  }
+
+  // PATCH /orders/:id/status — staff state-machine transitions
   @Patch(':id/status')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'manager', 'waiter', 'chef', 'cashier')
   updateStatus(
     @Param('id') id: string,
@@ -60,11 +84,12 @@ export class OrdersController {
     @Request() req: any,
     @Headers('idempotency-key') idempotencyKey: string,
   ) {
-    return this.ordersService.updateStatus(id, dto, req.user.id, idempotencyKey);
+    return this.ordersService.updateStatus(id, dto, req.user._id, idempotencyKey);
   }
 
   // PATCH /orders/:id/items/:itemId/progress  (Chef only)
   @Patch(':id/items/:itemId/progress')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('chef')
   updateProgress(
     @Param('id') orderId: string,
@@ -72,6 +97,6 @@ export class OrdersController {
     @Body('progress') progress: number,
     @Request() req: any,
   ) {
-    return this.ordersService.updateItemProgress(orderId, itemId, progress, req.user.id);
+    return this.ordersService.updateItemProgress(orderId, itemId, progress, req.user._id);
   }
 }

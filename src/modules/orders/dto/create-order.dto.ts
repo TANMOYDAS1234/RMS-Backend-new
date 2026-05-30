@@ -25,4 +25,9 @@ export class CreateOrderDto {
   items: OrderItemDto[];
 
   @IsOptional() @IsString() notes?: string;
+
+  // Public/QR flow only: customer posts this from the active session so the
+  // server can stamp branchId without trusting client input and link the
+  // order back to the session for billing.
+  @IsOptional() @IsString() sessionId?: string;
 }

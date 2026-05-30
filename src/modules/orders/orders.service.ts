@@ -5,6 +5,9 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  ForbiddenException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, ClientSession } from 'mongoose';
@@ -12,6 +15,14 @@ import { Order, OrderDocument, OrderStatus } from './order.schema';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
 import { OrdersGateway } from '../../gateways/orders.gateway';
+import { TablesService } from '../tables/tables.service';
+import { BranchesService } from '../branches/branches.service';
+import { SessionsService } from '../sessions/sessions.service';
+import {
+  AuthUser,
+  assertOwnsBranch,
+  scopeFilter,
+} from '../../common/scope/branch-scope';
 
 // Valid state machine transitions
 const TRANSITIONS: Partial<Record<OrderStatus, OrderStatus[]>> = {
@@ -24,47 +35,134 @@ const TRANSITIONS: Partial<Record<OrderStatus, OrderStatus[]>> = {
   [OrderStatus.PAID]: [OrderStatus.CLOSED],
 };
 
+const DEFAULT_GST_RATE = 0.18; // fallback if a branch hasn't configured one
+
 @Injectable()
 export class OrdersService {
   constructor(
     @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
     private readonly gateway: OrdersGateway,
+    private readonly tablesService: TablesService,
+    private readonly branchesService: BranchesService,
+    @Inject(forwardRef(() => SessionsService))
+    private readonly sessionsService: SessionsService,
   ) {}
 
-  async create(dto: CreateOrderDto, userId: string, idempotencyKey: string): Promise<Order> {
-    // Idempotency check
-    const existing = await this.orderModel.findOne({
-      processedKeys: idempotencyKey,
-    });
+  /** Compute subtotal + GST + total using the branch's configured rate. */
+  private async _price(items: CreateOrderDto['items'], branchId: string) {
+    const subtotal = items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
+    let gstRate = DEFAULT_GST_RATE;
+    try {
+      const branch = await this.branchesService.findById(branchId);
+      gstRate = (branch as any).gstRate ?? DEFAULT_GST_RATE;
+    } catch (_) {
+      // branch missing → fall back to default; don't block the order.
+    }
+    const gstAmount = +(subtotal * gstRate).toFixed(2);
+    const total = +(subtotal + gstAmount).toFixed(2);
+    return { subtotal, gstAmount, total };
+  }
+
+  /**
+   * Staff-initiated create. Derives branchId from the table (the table is
+   * branch-scoped) and asserts the caller is allowed to write to that branch.
+   */
+  async createForStaff(
+    dto: CreateOrderDto,
+    user: AuthUser,
+    idempotencyKey: string,
+  ): Promise<Order> {
+    const existing = await this.orderModel.findOne({ processedKeys: idempotencyKey });
     if (existing) return existing;
 
-    const subtotal = dto.items.reduce(
-      (sum, i) => sum + i.unitPrice * i.quantity,
-      0,
-    );
-    const gstAmount = +(subtotal * 0.18).toFixed(2);
-    const total = +(subtotal + gstAmount).toFixed(2);
+    const table = await this.tablesService.findById(dto.tableId);
+    const branchId = (table as any).branchId as string;
+    if (!branchId) {
+      throw new BadRequestException('Table is not assigned to a branch.');
+    }
+    assertOwnsBranch(user, { branchId } as any);
 
+    const { subtotal, gstAmount, total } = await this._price(dto.items, branchId);
     const order = await this.orderModel.create({
-      ...dto,
-      waiterId: userId,
+      tableId: dto.tableId,
+      tableLabel: dto.tableLabel,
+      items: dto.items,
+      notes: dto.notes,
+      branchId,
+      waiterId: (user as any)._id?.toString?.() ?? (user as any).id ?? undefined,
       subtotal,
       gstAmount,
       total,
       processedKeys: [idempotencyKey],
-      auditLog: [{ action: 'CREATED', by: userId, at: new Date() }],
+      auditLog: [{ action: 'CREATED', by: (user as any)._id ?? 'system', at: new Date() }],
     });
 
     this.gateway.emitOrderCreated(order);
     return order;
   }
 
-  async getActiveOrders(): Promise<Order[]> {
+  /**
+   * Public/QR create. The session is the trust anchor — it tells us the
+   * tableId and branchId, so a malicious body can't smuggle a different
+   * table or branch in. We also check the session isn't bill-pending or
+   * expired.
+   */
+  async createFromSession(dto: CreateOrderDto, idempotencyKey: string): Promise<Order> {
+    if (!dto.sessionId) throw new BadRequestException('sessionId is required');
+
+    const existing = await this.orderModel.findOne({ processedKeys: idempotencyKey });
+    if (existing) return existing;
+
+    // Session lookup (the service throws if missing).
+    const session: any = await (this.sessionsService as any).sessionModel.findById(dto.sessionId);
+    if (!session) throw new NotFoundException('Session not found');
+    if (session.status !== 'active') {
+      throw new ForbiddenException('Session is closed.');
+    }
+    if (session.billPending) {
+      throw new ConflictException(
+        'Bill is pending. Please complete payment before placing new orders.',
+      );
+    }
+    if (session.expiresAt && new Date(session.expiresAt).getTime() < Date.now()) {
+      throw new ForbiddenException('Session has expired. Please rescan the QR.');
+    }
+
+    // The QR feature toggle could have been turned off between the scan
+    // and the order. Re-check before committing the write.
+    const qrOk = await this.branchesService.isQrOrderingEnabled(session.branchId);
+    if (!qrOk) {
+      throw new ForbiddenException('QR ordering is currently unavailable.');
+    }
+
+    const { subtotal, gstAmount, total } = await this._price(dto.items, session.branchId);
+    const order = await this.orderModel.create({
+      tableId: session.tableId,
+      tableLabel: session.tableLabel,
+      items: dto.items,
+      notes: dto.notes,
+      branchId: session.branchId,
+      // Public orders have no waiter on creation; staff claims it later.
+      subtotal,
+      gstAmount,
+      total,
+      processedKeys: [idempotencyKey],
+      auditLog: [{ action: 'CREATED_QR', by: 'customer', at: new Date(), meta: { sessionId: session._id.toString() } }],
+    });
+
+    // Link order back to session so the bill endpoint can aggregate.
+    await this.sessionsService.addOrder(session._id.toString(), order._id.toString());
+
+    this.gateway.emitOrderCreated(order);
+    return order;
+  }
+
+  async getActiveOrders(user?: AuthUser): Promise<Order[]> {
+    const sf = user ? scopeFilter(user) : {};
     return this.orderModel
       .find({
-        status: {
-          $nin: [OrderStatus.PAID, OrderStatus.CLOSED],
-        },
+        ...sf,
+        status: { $nin: [OrderStatus.PAID, OrderStatus.CLOSED] },
       })
       .sort({ createdAt: -1 })
       .lean();
