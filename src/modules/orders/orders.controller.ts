@@ -99,4 +99,20 @@ export class OrdersController {
   ) {
     return this.ordersService.updateItemProgress(orderId, itemId, progress, req.user._id);
   }
+
+  // PATCH /orders/:id/items — wholesale item-list replacement, used by the
+  // waiter "amend order" flow. Only allowed before the kitchen starts work
+  // (status in CREATED/CONFIRMED). The service enforces the state-machine
+  // restriction so a desync between client and server can't sneak past it.
+  @Patch(':id/items')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'manager', 'waiter')
+  amendItems(
+    @Param('id') id: string,
+    @Body() body: { items: { itemId: string; name: string; quantity: number; unitPrice: number; notes?: string }[]; version: number; notes?: string },
+    @Request() req: any,
+    @Headers('idempotency-key') idempotencyKey: string,
+  ) {
+    return this.ordersService.amendItems(id, body, req.user, idempotencyKey);
+  }
 }

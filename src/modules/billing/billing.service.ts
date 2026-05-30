@@ -46,6 +46,7 @@ export class BillingService {
     paymentMethod: PaymentMethod,
     splitPayments?: { method: PaymentMethod; amount: number }[],
     idempotencyKey?: string,
+    razorpay?: { razorpayPaymentId?: string; razorpayOrderId?: string },
   ) {
     if (idempotencyKey) {
       const existing = await this.billModel.findOne({ _id: billId, processedKeys: idempotencyKey });
@@ -62,6 +63,12 @@ export class BillingService {
     bill.paymentMethod = paymentMethod;
     if (splitPayments?.length) bill.splitPayments = splitPayments as any;
     if (idempotencyKey) bill.processedKeys.push(idempotencyKey);
+    if (razorpay?.razorpayPaymentId) {
+      (bill as any).razorpayPaymentId = razorpay.razorpayPaymentId;
+    }
+    if (razorpay?.razorpayOrderId) {
+      (bill as any).razorpayOrderId = razorpay.razorpayOrderId;
+    }
 
     const saved = await bill.save();
 

@@ -40,6 +40,11 @@ export class Bill {
   @Prop({ default: false }) isRefunded: boolean;
   @Prop() refundedAt?: Date;
   @Prop() refundedBy?: string;
+
+  // Razorpay sandbox references. Stored for later reconciliation against
+  // the Razorpay dashboard — not used to authorize anything server-side.
+  @Prop() razorpayPaymentId?: string;
+  @Prop() razorpayOrderId?: string;
 }
 
 export const BillSchema = SchemaFactory.createForClass(Bill);

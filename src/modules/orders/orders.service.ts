@@ -297,6 +297,65 @@ export class OrdersService {
     }
   }
 
+  /**
+   * Replace the items list on an in-flight order. Used by the waiter
+   * "amend order" flow. Allowed before the kitchen starts (CREATED or
+   * CONFIRMED). Once status is PREPARING+ the kitchen is invested in
+   * the existing items — desk-side edits at that point cause
+   * double-cooks or wasted food. Optimistic lock via `version` (same as
+   * updateStatus) catches concurrent edits.
+   */
+  async amendItems(
+    id: string,
+    body: {
+      items: { itemId: string; name: string; quantity: number; unitPrice: number; notes?: string }[];
+      version: number;
+      notes?: string;
+    },
+    user: AuthUser,
+    idempotencyKey: string,
+  ): Promise<Order> {
+    if (!body.items?.length) {
+      throw new BadRequestException('At least one item is required.');
+    }
+    const existing = await this.orderModel.findOne({ _id: id, processedKeys: idempotencyKey });
+    if (existing) return existing;
+
+    const order = await this.orderModel.findById(id);
+    if (!order) throw new NotFoundException('Order not found');
+    assertOwnsBranch(user, order as any);
+
+    if (order.version !== body.version) {
+      throw new ConflictException({
+        message: 'Version conflict. Refresh and try again.',
+        serverVersion: order.version,
+        serverStatus: order.status,
+      });
+    }
+    if (![OrderStatus.CREATED, OrderStatus.CONFIRMED].includes(order.status)) {
+      throw new BadRequestException(
+        `Cannot amend items once order is ${order.status}.`,
+      );
+    }
+
+    const { subtotal, gstAmount, total } = await this._price(body.items, (order as any).branchId);
+    order.items = body.items as any;
+    if (body.notes !== undefined) order.notes = body.notes;
+    order.subtotal = subtotal;
+    order.gstAmount = gstAmount;
+    order.total = total;
+    order.processedKeys.push(idempotencyKey);
+    order.auditLog.push({
+      action: 'ITEMS_AMENDED',
+      by: (user as any)._id?.toString?.() ?? 'unknown',
+      at: new Date(),
+      meta: { newItemCount: body.items.length, newTotal: total },
+    });
+    await order.save();
+    this.gateway.emitOrderUpdated(order);
+    return order;
+  }
+
   async updateItemProgress(
     orderId: string,
     itemId: string,
