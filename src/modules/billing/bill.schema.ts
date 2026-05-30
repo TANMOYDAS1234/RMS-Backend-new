@@ -20,6 +20,8 @@ class SplitPayment {
 
 @Schema({ timestamps: true })
 export class Bill {
+  // Multi-tenant ownership — stamped from order.branchId on bill creation.
+  @Prop({ required: true, index: true }) branchId: string;
   @Prop({ required: true, type: Types.ObjectId, ref: 'Order' }) orderId: Types.ObjectId;
   @Prop({ required: true }) tableLabel: string;
   @Prop({ required: true }) subtotal: number;

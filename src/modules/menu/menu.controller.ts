@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Patch, Delete, Body, Param, Query,
+  Controller, Get, Post, Patch, Delete, Body, Param, Query, Request,
   UseGuards, UseInterceptors, UploadedFile, BadRequestException, Res,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -43,12 +43,12 @@ export class MenuController {
     @Query('category') category?: string,
   ) { return this.menuService.findByBranch(branchId, category); }
 
-  // ── Admin: all items for a branch (incl. unavailable) ────────────────────
+  // ── Admin/Manager: all items for a branch (incl. unavailable) ────────────
   @Get('branch/:branchId/admin')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'manager')
-  findByBranchAdmin(@Param('branchId') branchId: string) {
-    return this.menuService.findByBranchAdmin(branchId);
+  findByBranchAdmin(@Param('branchId') branchId: string, @Request() req: any) {
+    return this.menuService.findByBranchAdmin(branchId, req.user);
   }
 
   @Get(':id')
@@ -57,13 +57,15 @@ export class MenuController {
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'manager')
-  create(@Body() dto: CreateMenuItemDto) { return this.menuService.create(dto); }
+  create(@Body() dto: CreateMenuItemDto, @Request() req: any) {
+    return this.menuService.create(dto, req.user);
+  }
 
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'manager')
-  update(@Param('id') id: string, @Body() dto: Partial<CreateMenuItemDto>) {
-    return this.menuService.update(id, dto);
+  update(@Param('id') id: string, @Body() dto: Partial<CreateMenuItemDto>, @Request() req: any) {
+    return this.menuService.update(id, dto, req.user);
   }
 
   // ── Image upload ──────────────────────────────────────────────────────────
@@ -78,9 +80,9 @@ export class MenuController {
       cb(null, true);
     },
   }))
-  uploadImage(@Param('id') id: string, @UploadedFile() file: Express.Multer.File) {
+  uploadImage(@Param('id') id: string, @UploadedFile() file: Express.Multer.File, @Request() req: any) {
     if (!file) throw new BadRequestException('No file uploaded');
-    return this.menuService.uploadImage(id, file);
+    return this.menuService.uploadImage(id, file, req.user);
   }
 
   // ── Serve image ───────────────────────────────────────────────────────────
@@ -109,9 +111,9 @@ export class MenuController {
       cb(null, true);
     },
   }))
-  uploadGlb(@Param('id') id: string, @UploadedFile() file: Express.Multer.File) {
+  uploadGlb(@Param('id') id: string, @UploadedFile() file: Express.Multer.File, @Request() req: any) {
     if (!file) throw new BadRequestException('No file uploaded');
-    return this.menuService.uploadGlb(id, file);
+    return this.menuService.uploadGlb(id, file, req.user);
   }
 
   // ── Serve GLB ─────────────────────────────────────────────────────────────
@@ -134,10 +136,14 @@ export class MenuController {
   @Patch(':id/toggle')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'manager', 'chef')
-  toggle(@Param('id') id: string) { return this.menuService.toggleAvailability(id); }
+  toggle(@Param('id') id: string, @Request() req: any) {
+    return this.menuService.toggleAvailability(id, req.user);
+  }
 
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'manager')
-  delete(@Param('id') id: string) { return this.menuService.delete(id); }
+  delete(@Param('id') id: string, @Request() req: any) {
+    return this.menuService.delete(id, req.user);
+  }
 }

@@ -14,7 +14,9 @@ export enum TableStatus {
 
 @Schema({ timestamps: true })
 export class Table {
-  @Prop({ required: true, unique: true }) label: string;
+  // Per-branch ownership. Tables are scoped to a single physical branch.
+  @Prop({ required: true, index: true }) branchId: string;
+  @Prop({ required: true }) label: string;
   @Prop({ required: true, min: 1 }) capacity: number;
   @Prop({ enum: TableStatus, default: TableStatus.AVAILABLE }) status: TableStatus;
   @Prop() activeOrderId?: string;
@@ -23,3 +25,6 @@ export class Table {
 
 export const TableSchema = SchemaFactory.createForClass(Table);
 TableSchema.index({ status: 1 });
+// Table label uniqueness must be per-branch, not global. Different branches
+// can both have "T-01".
+TableSchema.index({ branchId: 1, label: 1 }, { unique: true });

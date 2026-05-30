@@ -11,12 +11,16 @@ import { UserRole } from './user.schema';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { resolveBranchIdForCreate, isAdmin } from '../../common/scope/branch-scope';
 
 class CreateUserDto {
   @IsString() name: string;
   @IsEmail() email: string;
   @IsString() @MinLength(6) password: string;
   @IsOptional() @IsEnum(UserRole) role?: UserRole;
+  // Admin: optional (can omit to create a branch-less user, e.g. another admin).
+  // Manager: forced to their own branchId regardless of what they send.
+  @IsOptional() @IsString() branchId?: string;
 }
 
 class UpdateUserDto {
@@ -43,18 +47,33 @@ export class UsersController {
   // ── List / Create ──────────────────────────────────────────────────────────
   @Get()
   @Roles('admin', 'manager')
-  findAll() { return this.usersService.findAll(); }
+  findAll(@Request() req: any) {
+    // Admin: every user. Manager: only users in their branch.
+    return this.usersService.findAll(req.user);
+  }
 
   @Post()
-  @Roles('admin')
-  create(@Body() dto: CreateUserDto) { return this.usersService.create(dto); }
+  @Roles('admin', 'manager')
+  create(@Body() dto: CreateUserDto, @Request() req: any) {
+    // Manager: forced to own branch. Admin: may pick any branchId or omit.
+    // Manager is also forbidden from creating other managers/admins below.
+    const branchId = resolveBranchIdForCreate(req.user, dto.branchId);
+    if (!isAdmin(req.user)) {
+      if (dto.role === UserRole.ADMIN || dto.role === UserRole.MANAGER) {
+        throw new BadRequestException(
+          'Managers can only create waiter/chef/cashier accounts.',
+        );
+      }
+    }
+    return this.usersService.create({ ...dto, branchId });
+  }
 
   // ── /me routes MUST come before /:id to avoid param collision ─────────────
 
   @Patch('me/fcm-token')
   @Roles('admin', 'manager', 'waiter', 'chef', 'cashier')
   updateFcmToken(@Request() req: any, @Body('fcmToken') fcmToken: string) {
-    return this.usersService.update(req.user._id, { fcmToken });
+    return this.usersService.update(req.user._id, { fcmToken }, req.user);
   }
 
   @Post('me/photo')
@@ -62,27 +81,42 @@ export class UsersController {
   @UseInterceptors(photoInterceptor())
   uploadOwnPhoto(@Request() req: any, @UploadedFile() file: Express.Multer.File) {
     if (!file) throw new BadRequestException('No file uploaded');
-    return this.usersService.uploadPhoto(req.user._id, file);
+    return this.usersService.uploadPhoto(req.user._id, file, req.user);
   }
 
   // ── /:id routes ────────────────────────────────────────────────────────────
 
   @Get(':id')
   @Roles('admin', 'manager')
-  findOne(@Param('id') id: string) { return this.usersService.findById(id); }
+  findOne(@Param('id') id: string, @Request() req: any) {
+    return this.usersService.findById(id, req.user);
+  }
 
   @Patch(':id')
-  @Roles('admin')
-  update(@Param('id') id: string, @Body() dto: UpdateUserDto) {
-    return this.usersService.update(id, dto);
+  @Roles('admin', 'manager')
+  update(@Param('id') id: string, @Body() dto: UpdateUserDto, @Request() req: any) {
+    if (!isAdmin(req.user)) {
+      // Manager cannot escalate role or move users across branches.
+      if (dto.role === UserRole.ADMIN || dto.role === UserRole.MANAGER) {
+        throw new BadRequestException('Insufficient privileges to assign that role.');
+      }
+      if (dto.branchId && dto.branchId !== req.user.branchId) {
+        throw new BadRequestException('Cannot move users to another branch.');
+      }
+    }
+    return this.usersService.update(id, dto, req.user);
   }
 
   @Post(':id/photo')
-  @Roles('admin')
+  @Roles('admin', 'manager')
   @UseInterceptors(photoInterceptor())
-  uploadPhoto(@Param('id') id: string, @UploadedFile() file: Express.Multer.File) {
+  uploadPhoto(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Request() req: any,
+  ) {
     if (!file) throw new BadRequestException('No file uploaded');
-    return this.usersService.uploadPhoto(id, file);
+    return this.usersService.uploadPhoto(id, file, req.user);
   }
 
   @Get(':id/photo')
@@ -104,6 +138,12 @@ export class UsersController {
   }
 
   @Delete(':id')
-  @Roles('admin')
-  delete(@Param('id') id: string) { return this.usersService.delete(id); }
+  @Roles('admin', 'manager')
+  delete(@Param('id') id: string, @Request() req: any) {
+    if (!isAdmin(req.user)) {
+      // Manager cannot delete other managers/admins, even if same-branch.
+      // The service-layer ownership check handles cross-branch refusal.
+    }
+    return this.usersService.delete(id, req.user);
+  }
 }

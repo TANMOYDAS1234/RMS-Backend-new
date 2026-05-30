@@ -48,7 +48,9 @@ export class ManagerController {
 
   // ── Operations ─────────────────────────────────────────────────────────────
   @Get('operations')
-  getOperations() { return this.managerService.getOperationsSummary(); }
+  getOperations(@Request() req: any) {
+    return this.managerService.getOperationsSummary(req.user);
+  }
 
   // ── Single order-action endpoint — avoids :id/:suffix param collision ──────
   // Handles: force-close | override-status | discount | prioritize
@@ -61,10 +63,10 @@ export class ManagerController {
   ) {
     switch (action) {
       case 'force-close':
-        return this.managerService.forceCloseOrder(id, req.user._id, body.expectedVersion);
+        return this.managerService.forceCloseOrder(id, req.user._id, req.user, body.expectedVersion);
       case 'override-status':
         if (!body.status) throw new BadRequestException('status is required for override-status');
-        return this.managerService.overrideStatus(id, body.status, req.user._id, body.expectedVersion);
+        return this.managerService.overrideStatus(id, body.status, req.user._id, req.user, body.expectedVersion);
       case 'discount':
         if (body.discountPercent === undefined) {
           throw new BadRequestException('discountPercent is required for discount');
@@ -74,10 +76,11 @@ export class ManagerController {
           body.discountPercent,
           req.user._id,
           body.reason ?? 'Manager discount',
+          req.user,
           body.expectedVersion,
         );
       case 'prioritize':
-        return this.managerService.prioritizeOrder(id, req.user._id, body.expectedVersion);
+        return this.managerService.prioritizeOrder(id, req.user._id, req.user, body.expectedVersion);
       default:
         throw new NotFoundException(`Unknown action: ${action}`);
     }
@@ -85,7 +88,9 @@ export class ManagerController {
 
   // ── Tables ─────────────────────────────────────────────────────────────────
   @Get('tables')
-  getTables() { return this.managerService.getTablesWithOccupancy(); }
+  getTables(@Request() req: any) {
+    return this.managerService.getTablesWithOccupancy(req.user);
+  }
 
   @Patch('tables/:id/status')
   updateTableStatus(
@@ -93,37 +98,49 @@ export class ManagerController {
     @Body() dto: UpdateTableStatusDto,
     @Request() req: any,
   ) {
-    return this.managerService.updateTableStatus(id, dto.status, req.user?._id);
+    return this.managerService.updateTableStatus(id, dto.status, req.user?._id, req.user);
   }
 
   // ── Staff ──────────────────────────────────────────────────────────────────
   @Get('staff')
-  getStaff() { return this.managerService.getStaffWithActivity(); }
+  getStaff(@Request() req: any) {
+    return this.managerService.getStaffWithActivity(req.user);
+  }
 
   // ── Discounts ──────────────────────────────────────────────────────────────
   @Get('discount-requests')
-  getDiscountRequests() { return this.managerService.getPendingDiscountRequests(); }
+  getDiscountRequests(@Request() req: any) {
+    return this.managerService.getPendingDiscountRequests(req.user);
+  }
 
   // ── Kitchen ────────────────────────────────────────────────────────────────
   @Get('kitchen')
-  getKitchen() { return this.managerService.getKitchenWorkload(); }
+  getKitchen(@Request() req: any) {
+    return this.managerService.getKitchenWorkload(req.user);
+  }
 
   // ── Inventory ──────────────────────────────────────────────────────────────
   @Get('inventory')
-  getInventory() { return this.managerService.getInventoryStatus(); }
+  getInventory(@Request() req: any) {
+    return this.managerService.getInventoryStatus(req.user);
+  }
 
   @Post('inventory/:id/report-shortage')
   reportShortage(@Param('id') id: string, @Body() dto: ShortageDto, @Request() req: any) {
-    return this.managerService.reportShortage(id, req.user._id, dto.note);
+    return this.managerService.reportShortage(id, req.user._id, dto.note, req.user);
   }
 
   // ── Reports ────────────────────────────────────────────────────────────────
   @Get('report')
-  getReport() { return this.managerService.getOperationalReport(); }
+  getReport(@Request() req: any) {
+    return this.managerService.getOperationalReport(req.user);
+  }
 
   // ── Customer Service ───────────────────────────────────────────────────────
   @Get('complaints')
-  getComplaints() { return this.managerService.getComplaints(); }
+  getComplaints(@Request() req: any) {
+    return this.managerService.getComplaints(req.user);
+  }
 
   @Post('complaints')
   logComplaint(@Body() dto: ComplaintDto, @Request() req: any) {
@@ -131,6 +148,7 @@ export class ManagerController {
       dto.tableLabel,
       dto.issue,
       req.user._id,
+      req.user,
       dto.category,
       dto.severity,
     );
@@ -138,7 +156,7 @@ export class ManagerController {
 
   @Patch('complaints/resolve')
   resolveComplaint(@Body() dto: ResolveComplaintDto, @Request() req: any) {
-    return this.managerService.resolveComplaint(dto.orderId, dto.complaintId, req.user._id, dto.resolution);
+    return this.managerService.resolveComplaint(dto.orderId, dto.complaintId, req.user._id, dto.resolution, req.user);
   }
 
   // ── Manager Action Log (durable audit trail) ───────────────────────────────

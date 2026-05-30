@@ -7,7 +7,11 @@ export type IngredientDocument = Ingredient & Document;
 
 @Schema({ timestamps: true })
 export class Ingredient {
-  @Prop({ required: true, unique: true }) name: string;
+  // Per-branch ownership. Required so multi-tenant scoping cannot be
+  // bypassed by omitting the field on creation. Use `default: null` only
+  // for the backfill migration; new docs MUST come with a real branchId.
+  @Prop({ required: true, index: true }) branchId: string;
+  @Prop({ required: true }) name: string;
   @Prop({ required: true }) unit: string; // kg, litre, piece
   @Prop({ required: true, min: 0 }) currentStock: number;
   @Prop({ required: true, min: 0 }) lowStockThreshold: number;
@@ -23,3 +27,6 @@ export class Ingredient {
 
 export const IngredientSchema = SchemaFactory.createForClass(Ingredient);
 IngredientSchema.index({ currentStock: 1 });
+// Same ingredient name can exist in different branches; collision only
+// matters within a branch.
+IngredientSchema.index({ branchId: 1, name: 1 }, { unique: true });

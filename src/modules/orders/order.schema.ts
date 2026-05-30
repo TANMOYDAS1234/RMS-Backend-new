@@ -30,6 +30,10 @@ const OrderItemSchema = SchemaFactory.createForClass(OrderItem);
 
 @Schema({ timestamps: true, optimisticConcurrency: true })
 export class Order {
+  // Multi-tenant ownership. Stamped from session.branchId (QR flow) or
+  // req.user.branchId (staff flow). Indexed because manager dashboards
+  // filter by it on nearly every read.
+  @Prop({ required: true, index: true }) branchId: string;
   @Prop({ required: true }) tableId: string;
   @Prop({ required: true }) tableLabel: string;
   @Prop({ type: [OrderItemSchema], default: [] }) items: OrderItem[];

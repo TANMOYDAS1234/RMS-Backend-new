@@ -11,6 +11,8 @@ class CreateIngredientDto {
   @IsNumber() @Min(0) currentStock: number;
   @IsNumber() @Min(0) lowStockThreshold: number;
   @IsOptional() @IsNumber() costPerUnit?: number;
+  // Admin: optional (must match a real branch). Manager: forced to own branch.
+  @IsOptional() @IsString() branchId?: string;
 }
 
 class AdjustStockDto {
@@ -25,33 +27,39 @@ export class InventoryController {
 
   @Get()
   @Roles('admin', 'manager', 'chef')
-  findAll() { return this.inventoryService.findAll(); }
+  findAll(@Request() req: any) { return this.inventoryService.findAll(req.user); }
 
   @Get('low-stock')
   @Roles('admin', 'manager', 'chef')
-  lowStock() { return this.inventoryService.findLowStock(); }
+  lowStock(@Request() req: any) { return this.inventoryService.findLowStock(req.user); }
 
   @Get(':id')
   @Roles('admin', 'manager', 'chef')
-  findOne(@Param('id') id: string) { return this.inventoryService.findById(id); }
+  findOne(@Param('id') id: string, @Request() req: any) {
+    return this.inventoryService.findById(id, req.user);
+  }
 
   @Post()
   @Roles('admin', 'manager')
-  create(@Body() dto: CreateIngredientDto) { return this.inventoryService.create(dto); }
+  create(@Body() dto: CreateIngredientDto, @Request() req: any) {
+    return this.inventoryService.create(dto, req.user);
+  }
 
   @Patch(':id/adjust')
   @Roles('admin', 'manager', 'chef')
   adjust(@Param('id') id: string, @Body() dto: AdjustStockDto, @Request() req: any) {
-    return this.inventoryService.adjustStock(id, dto.delta, dto.reason, req.user._id);
+    return this.inventoryService.adjustStock(id, dto.delta, dto.reason, req.user._id, req.user);
   }
 
   @Patch(':id')
   @Roles('admin', 'manager')
-  update(@Param('id') id: string, @Body() dto: Partial<CreateIngredientDto>) {
-    return this.inventoryService.update(id, dto);
+  update(@Param('id') id: string, @Body() dto: Partial<CreateIngredientDto>, @Request() req: any) {
+    return this.inventoryService.update(id, dto, req.user);
   }
 
   @Delete(':id')
-  @Roles('admin')
-  delete(@Param('id') id: string) { return this.inventoryService.delete(id); }
+  @Roles('admin', 'manager')
+  delete(@Param('id') id: string, @Request() req: any) {
+    return this.inventoryService.delete(id, req.user);
+  }
 }

@@ -8,6 +8,8 @@ import { OrderStatus } from '../orders/order.schema';
 import { ManagerActionType } from './manager-action-log.schema';
 
 const _validId = () => new Types.ObjectId().toHexString();
+// Admin scope bypasses assertOwnsBranch — exactly what tests want by default.
+const adminScope: any = { _id: 'admin_1', role: 'admin', branchId: null };
 
 function fakeOrder(overrides: Partial<any> = {}): any {
   return {
@@ -46,7 +48,7 @@ describe('ManagerService.forceCloseOrder', () => {
     const orderModel = { findById: jest.fn().mockResolvedValue(order) };
     const svc = buildService(orderModel);
 
-    await expect(svc.forceCloseOrder(_validId(), 'mgr_1', 3))
+    await expect(svc.forceCloseOrder(_validId(), 'mgr_1', adminScope, 3))
       .rejects.toBeInstanceOf(ConflictException);
     expect(order.save).not.toHaveBeenCalled();
   });
@@ -57,7 +59,7 @@ describe('ManagerService.forceCloseOrder', () => {
     const actionLog = mockActionLog();
     const svc = buildService(orderModel, actionLog);
 
-    await svc.forceCloseOrder(_validId(), 'mgr_1', 5);
+    await svc.forceCloseOrder(_validId(), 'mgr_1', adminScope, 5);
 
     // Order audit entry should reference PREPARING, not CLOSED.
     expect(order.auditLog[0].meta.previousStatus).toBe(OrderStatus.PREPARING);
@@ -74,14 +76,14 @@ describe('ManagerService.forceCloseOrder', () => {
     const order = fakeOrder({ status: OrderStatus.CLOSED });
     const orderModel = { findById: jest.fn().mockResolvedValue(order) };
     const svc = buildService(orderModel);
-    await expect(svc.forceCloseOrder(_validId(), 'mgr_1'))
+    await expect(svc.forceCloseOrder(_validId(), 'mgr_1', adminScope))
       .rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('throws NotFoundException when the order does not exist', async () => {
     const orderModel = { findById: jest.fn().mockResolvedValue(null) };
     const svc = buildService(orderModel);
-    await expect(svc.forceCloseOrder('missing', 'mgr_1'))
+    await expect(svc.forceCloseOrder('missing', 'mgr_1', adminScope))
       .rejects.toBeInstanceOf(NotFoundException);
   });
 
@@ -90,7 +92,7 @@ describe('ManagerService.forceCloseOrder', () => {
     order.save.mockRejectedValue({ name: 'VersionError' });
     const orderModel = { findById: jest.fn().mockResolvedValue(order) };
     const svc = buildService(orderModel);
-    await expect(svc.forceCloseOrder('order_1', 'mgr_1', 5))
+    await expect(svc.forceCloseOrder('order_1', 'mgr_1', adminScope, 5))
       .rejects.toBeInstanceOf(ConflictException);
   });
 });
@@ -100,7 +102,7 @@ describe('ManagerService.applyDiscount', () => {
     const orderModel = { findById: jest.fn().mockResolvedValue(fakeOrder()) };
     const svc = buildService(orderModel);
     for (const bad of [NaN, Infinity, -1, 101]) {
-      await expect(svc.applyDiscount(_validId(), bad, 'mgr_1', 'why'))
+      await expect(svc.applyDiscount(_validId(), bad, 'mgr_1', 'why', adminScope))
         .rejects.toBeInstanceOf(BadRequestException);
     }
   });
@@ -117,7 +119,7 @@ describe('ManagerService.applyDiscount', () => {
       { emitOrderUpdated: jest.fn() } as any,
     );
 
-    await svc.applyDiscount(_validId(), 20, 'mgr_1', 'VIP', 1);
+    await svc.applyDiscount(_validId(), 20, 'mgr_1', 'VIP', adminScope, 1);
     // 1000 - 200 = 800 net, 800 * 0.18 = 144 gst, total = 944
     expect(order.discountAmount).toBe(200);
     expect(order.gstAmount).toBe(144);

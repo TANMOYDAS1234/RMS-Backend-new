@@ -1,11 +1,12 @@
 import {
-  Controller, Get, Post, Patch, Delete, Body, Param, UseGuards,
+  Controller, Get, Post, Patch, Delete, Body, Param, Request, UseGuards,
 } from '@nestjs/common';
 import { IsNumber, IsOptional, IsString } from 'class-validator';
 import { BranchesService } from './branches.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { isAdmin } from '../../common/scope/branch-scope';
 
 class UpdateBranchDto {
   @IsOptional() @IsString() name?: string;
@@ -22,7 +23,14 @@ export class BranchesController {
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'manager')
-  findAll() { return this.branchesService.findAll(); }
+  async findAll(@Request() req: any) {
+    // Admin sees every branch; manager sees only their own (so the picker
+    // and dropdowns don't leak the multi-tenant topology).
+    if (isAdmin(req.user)) return this.branchesService.findAll();
+    if (!req.user?.branchId) return [];
+    const own = await this.branchesService.findById(req.user.branchId);
+    return own ? [own] : [];
+  }
 
   // Public — needed by QR web app to check feature flags before showing order UI
   @Get('slug/:slug')

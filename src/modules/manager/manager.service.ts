@@ -12,6 +12,11 @@ import {
   ManagerActionLogDocument,
   ManagerActionType,
 } from './manager-action-log.schema';
+import {
+  AuthUser,
+  assertOwnsBranch,
+  scopeFilter,
+} from '../../common/scope/branch-scope';
 
 @Injectable()
 export class ManagerService {
@@ -61,13 +66,14 @@ export class ManagerService {
   }
 
   // ── Operations: live order pipeline ────────────────────────────────────────
-  async getOperationsSummary() {
+  async getOperationsSummary(scope: AuthUser) {
+    const sf = scopeFilter(scope);
     const [orders, tables, lowStock, unpaidBills, dailyRev] = await Promise.all([
-      this.orderModel.find({ status: { $nin: [OrderStatus.CLOSED, OrderStatus.PAID] } }).lean(),
-      this.tableModel.find().lean(),
-      this.ingredientModel.countDocuments({ $expr: { $lte: ['$currentStock', '$lowStockThreshold'] } }),
-      this.billModel.countDocuments({ isPaid: false }),
-      this._getDailyRevenue(),
+      this.orderModel.find({ ...sf, status: { $nin: [OrderStatus.CLOSED, OrderStatus.PAID] } }).lean(),
+      this.tableModel.find(sf).lean(),
+      this.ingredientModel.countDocuments({ ...sf, $expr: { $lte: ['$currentStock', '$lowStockThreshold'] } }),
+      this.billModel.countDocuments({ ...sf, isPaid: false }),
+      this._getDailyRevenue(scope),
     ]);
 
     const pipeline: Record<string, number> = {};
@@ -122,10 +128,23 @@ export class ManagerService {
     return order;
   }
 
+  /** Wraps _withVersionedOrder with a branch ownership check after load. */
+  private async _withScopedOrder(
+    orderId: string,
+    expectedVersion: number | undefined,
+    scope: AuthUser,
+    mutate: (order: OrderDocument) => void | Promise<void>,
+  ): Promise<OrderDocument> {
+    return this._withVersionedOrder(orderId, expectedVersion, async (o) => {
+      assertOwnsBranch(scope, o as any);
+      await mutate(o);
+    });
+  }
+
   // ── Force-close order (manager override) ───────────────────────────────────
-  async forceCloseOrder(orderId: string, managerId: string, expectedVersion?: number) {
+  async forceCloseOrder(orderId: string, managerId: string, scope: AuthUser, expectedVersion?: number) {
     let prevStatus: OrderStatus | undefined;
-    const order = await this._withVersionedOrder(orderId, expectedVersion, (o) => {
+    const order = await this._withScopedOrder(orderId, expectedVersion, scope, (o) => {
       if (o.status === OrderStatus.CLOSED) throw new BadRequestException('Already closed');
       prevStatus = o.status;
       o.status = OrderStatus.CLOSED;
@@ -144,12 +163,12 @@ export class ManagerService {
   }
 
   // ── Override order status ───────────────────────────────────────────────────
-  async overrideStatus(orderId: string, status: OrderStatus, managerId: string, expectedVersion?: number) {
+  async overrideStatus(orderId: string, status: OrderStatus, managerId: string, scope: AuthUser, expectedVersion?: number) {
     if (!Object.values(OrderStatus).includes(status)) {
       throw new BadRequestException(`Invalid status: ${status}`);
     }
     let prev: OrderStatus | undefined;
-    const order = await this._withVersionedOrder(orderId, expectedVersion, (o) => {
+    const order = await this._withScopedOrder(orderId, expectedVersion, scope, (o) => {
       prev = o.status;
       o.status = status;
       o.auditLog.push({ action: 'STATUS_OVERRIDE', by: managerId, at: new Date(), meta: { from: prev, to: status } });
@@ -167,10 +186,11 @@ export class ManagerService {
   }
 
   // ── Tables: full list with occupancy ───────────────────────────────────────
-  async getTablesWithOccupancy(): Promise<any[]> {
+  async getTablesWithOccupancy(scope: AuthUser): Promise<any[]> {
+    const sf = scopeFilter(scope);
     const [tables, activeOrders] = await Promise.all([
-      this.tableModel.find().lean(),
-      this.orderModel.find({ status: { $nin: [OrderStatus.CLOSED, OrderStatus.PAID] } }).lean(),
+      this.tableModel.find(sf).lean(),
+      this.orderModel.find({ ...sf, status: { $nin: [OrderStatus.CLOSED, OrderStatus.PAID] } }).lean(),
     ]);
     return tables.map((t) => {
       const order = activeOrders.find((o) => o.tableId === t._id.toString());
@@ -178,8 +198,10 @@ export class ManagerService {
     });
   }
 
-  async updateTableStatus(tableId: string, status: TableStatus, managerId?: string) {
+  async updateTableStatus(tableId: string, status: TableStatus, managerId: string | undefined, scope: AuthUser) {
     const prev = await this.tableModel.findById(tableId).lean();
+    if (!prev) throw new NotFoundException('Table not found');
+    assertOwnsBranch(scope, prev as any);
     const table = await this.tableModel.findByIdAndUpdate(tableId, { status }, { new: true }).lean();
     if (!table) throw new NotFoundException('Table not found');
     if (managerId) {
@@ -195,11 +217,12 @@ export class ManagerService {
   }
 
   // ── Staff: list with today's order count ───────────────────────────────────
-  async getStaffWithActivity(): Promise<any[]> {
+  async getStaffWithActivity(scope: AuthUser): Promise<any[]> {
     const today = new Date(); today.setHours(0, 0, 0, 0);
+    const sf = scopeFilter(scope);
     const [staff, orders] = await Promise.all([
-      this.userModel.find({ role: { $in: ['waiter', 'chef', 'cashier', 'manager'] } }).select('-password').lean(),
-      this.orderModel.find({ createdAt: { $gte: today } }).lean(),
+      this.userModel.find({ ...sf, role: { $in: ['waiter', 'chef', 'cashier', 'manager'] } }).select('-password').lean(),
+      this.orderModel.find({ ...sf, createdAt: { $gte: today } }).lean(),
     ]);
     return staff.map((s) => ({
       ...s,
@@ -213,12 +236,13 @@ export class ManagerService {
     discountPercent: number,
     managerId: string,
     reason: string,
+    scope: AuthUser,
     expectedVersion?: number,
   ) {
     if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) {
       throw new BadRequestException('Invalid discount');
     }
-    const order = await this._withVersionedOrder(orderId, expectedVersion, (o) => {
+    const order = await this._withScopedOrder(orderId, expectedVersion, scope, (o) => {
       const discountAmount = +(o.subtotal * (discountPercent / 100)).toFixed(2);
       const gstAmount = +((o.subtotal - discountAmount) * 0.18).toFixed(2);
       const total = +(o.subtotal - discountAmount + gstAmount).toFixed(2);
@@ -254,14 +278,17 @@ export class ManagerService {
   }
 
   // ── Pending discount requests (bills with no discount yet) ─────────────────
-  async getPendingDiscountRequests() {
-    return this.billModel.find({ isPaid: false, discountPercent: 0 }).lean();
+  async getPendingDiscountRequests(scope: AuthUser) {
+    return this.billModel.find({ ...scopeFilter(scope), isPaid: false, discountPercent: 0 }).lean();
   }
 
   // ── Kitchen workload ───────────────────────────────────────────────────────
-  async getKitchenWorkload() {
+  async getKitchenWorkload(scope: AuthUser) {
     const orders = await this.orderModel
-      .find({ status: { $in: [OrderStatus.CONFIRMED, OrderStatus.PREPARING, OrderStatus.READY] } })
+      .find({
+        ...scopeFilter(scope),
+        status: { $in: [OrderStatus.CONFIRMED, OrderStatus.PREPARING, OrderStatus.READY] },
+      })
       .sort({ createdAt: 1 })
       .lean();
 
@@ -277,8 +304,8 @@ export class ManagerService {
   }
 
   // ── Prioritize order (move to top of kitchen queue via audit) ──────────────
-  async prioritizeOrder(orderId: string, managerId: string, expectedVersion?: number) {
-    const order = await this._withVersionedOrder(orderId, expectedVersion, (o) => {
+  async prioritizeOrder(orderId: string, managerId: string, scope: AuthUser, expectedVersion?: number) {
+    const order = await this._withScopedOrder(orderId, expectedVersion, scope, (o) => {
       o.auditLog.push({ action: 'PRIORITIZED', by: managerId, at: new Date() });
     });
     this._audit({
@@ -292,15 +319,16 @@ export class ManagerService {
   }
 
   // ── Inventory: low stock + full list ───────────────────────────────────────
-  async getInventoryStatus() {
-    const items = await this.ingredientModel.find().lean();
+  async getInventoryStatus(scope: AuthUser) {
+    const items = await this.ingredientModel.find(scopeFilter(scope)).lean();
     const low = items.filter((i) => i.currentStock <= i.lowStockThreshold);
     return { items, lowCount: low.length, lowItems: low };
   }
 
-  async reportShortage(ingredientId: string, managerId: string, note: string) {
+  async reportShortage(ingredientId: string, managerId: string, note: string, scope: AuthUser) {
     const item = await this.ingredientModel.findById(ingredientId);
     if (!item) throw new NotFoundException('Ingredient not found');
+    assertOwnsBranch(scope, item as any);
     item.stockLog.push({ delta: 0, reason: `SHORTAGE_REPORTED: ${note}`, by: managerId, at: new Date() });
     const saved = await item.save();
     this._audit({
@@ -314,13 +342,14 @@ export class ManagerService {
   }
 
   // ── Reports ────────────────────────────────────────────────────────────────
-  async getOperationalReport() {
+  async getOperationalReport(scope: AuthUser) {
     const today = new Date(); today.setHours(0, 0, 0, 0);
+    const sf = scopeFilter(scope);
     const [orders, bills, staffActivity] = await Promise.all([
-      this.orderModel.find({ createdAt: { $gte: today } }).lean(),
-      this.billModel.find({ createdAt: { $gte: today } }).lean(),
+      this.orderModel.find({ ...sf, createdAt: { $gte: today } }).lean(),
+      this.billModel.find({ ...sf, createdAt: { $gte: today } }).lean(),
       this.orderModel.aggregate([
-        { $match: { createdAt: { $gte: today }, waiterId: { $exists: true, $ne: null } } },
+        { $match: { ...sf, createdAt: { $gte: today }, waiterId: { $exists: true, $ne: null } } },
         { $group: { _id: '$waiterId', count: { $sum: 1 }, revenue: { $sum: '$total' } } },
         {
           $addFields: {
@@ -376,10 +405,11 @@ export class ManagerService {
     tableLabel: string,
     issue: string,
     managerId: string,
+    scope: AuthUser,
     category?: string,
     severity?: string,
   ) {
-    const order = await this.orderModel.findOne({ tableLabel }).sort({ createdAt: -1 });
+    const order = await this.orderModel.findOne({ ...scopeFilter(scope), tableLabel }).sort({ createdAt: -1 });
     if (!order) {
       throw new NotFoundException(`No order found for table ${tableLabel}`);
     }
@@ -394,8 +424,9 @@ export class ManagerService {
     return { logged: true, tableLabel, issue, complaintId, orderId: order._id };
   }
 
-  async getComplaints() {
+  async getComplaints(scope: AuthUser) {
     return this.orderModel.aggregate([
+      { $match: scopeFilter(scope) },
       { $unwind: '$auditLog' },
       { $match: { 'auditLog.action': 'COMPLAINT_LOGGED' } },
       {
@@ -416,9 +447,10 @@ export class ManagerService {
     ]);
   }
 
-  async resolveComplaint(orderId: string, complaintId: string, managerId: string, resolution: string) {
+  async resolveComplaint(orderId: string, complaintId: string, managerId: string, resolution: string, scope: AuthUser) {
     const order = await this.orderModel.findById(orderId);
     if (!order) throw new NotFoundException('Order not found');
+    assertOwnsBranch(scope, order as any);
     const entry = order.auditLog.find(
       (e: any) => e.action === 'COMPLAINT_LOGGED' && e.meta?.complaintId === complaintId,
     ) as any;
@@ -438,10 +470,10 @@ export class ManagerService {
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
-  private async _getDailyRevenue() {
+  private async _getDailyRevenue(scope: AuthUser) {
     const start = new Date(); start.setHours(0, 0, 0, 0);
     const res = await this.billModel.aggregate([
-      { $match: { isPaid: true, paidAt: { $gte: start } } },
+      { $match: { ...scopeFilter(scope), isPaid: true, paidAt: { $gte: start } } },
       { $group: { _id: null, total: { $sum: '$total' }, count: { $sum: 1 } } },
     ]);
     return res[0] ?? { total: 0, count: 0 };

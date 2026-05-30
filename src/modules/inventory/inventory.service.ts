@@ -1,10 +1,16 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Model } from 'mongoose';
 import * as https from 'https';
 import { Ingredient, IngredientDocument } from './ingredient.schema';
 import { User, UserDocument } from '../users/user.schema';
+import {
+  AuthUser,
+  assertOwnsBranch,
+  resolveBranchIdForCreate,
+  scopeFilter,
+} from '../../common/scope/branch-scope';
 
 @Injectable()
 export class InventoryService {
@@ -14,54 +20,96 @@ export class InventoryService {
     private config: ConfigService,
   ) {}
 
-  async findAll() { return this.ingredientModel.find().lean(); }
-
-  async findLowStock() {
-    return this.ingredientModel.find({ $expr: { $lte: ['$currentStock', '$lowStockThreshold'] } }).lean();
+  async findAll(scope: AuthUser) {
+    return this.ingredientModel.find(scopeFilter(scope)).lean();
   }
 
-  async findById(id: string) {
+  async findLowStock(scope: AuthUser) {
+    return this.ingredientModel
+      .find({
+        ...scopeFilter(scope),
+        $expr: { $lte: ['$currentStock', '$lowStockThreshold'] },
+      })
+      .lean();
+  }
+
+  async findById(id: string, scope: AuthUser) {
     const item = await this.ingredientModel.findById(id).lean();
     if (!item) throw new NotFoundException('Ingredient not found');
+    assertOwnsBranch(scope, item as any);
     return item;
   }
 
-  async create(dto: { name: string; unit: string; currentStock: number; lowStockThreshold: number; costPerUnit?: number }) {
-    return this.ingredientModel.create(dto);
+  async create(
+    dto: { name: string; unit: string; currentStock: number; lowStockThreshold: number; costPerUnit?: number; branchId?: string },
+    scope: AuthUser,
+  ) {
+    const branchId = resolveBranchIdForCreate(scope, dto.branchId);
+    if (!branchId) throw new BadRequestException('branchId is required');
+    return this.ingredientModel.create({ ...dto, branchId });
   }
 
-  async adjustStock(id: string, delta: number, reason: string, by: string) {
+  async adjustStock(id: string, delta: number, reason: string, by: string, scope: AuthUser) {
     const item = await this.ingredientModel.findById(id);
     if (!item) throw new NotFoundException('Ingredient not found');
+    assertOwnsBranch(scope, item as any);
 
     const wasOk = item.currentStock > item.lowStockThreshold;
     item.currentStock = Math.max(0, item.currentStock + delta);
     item.stockLog.push({ delta, reason, by, at: new Date() });
     await item.save();
 
-    // Fire low-stock notification only when crossing the threshold downward
     if (wasOk && item.currentStock <= item.lowStockThreshold) {
-      this.sendLowStockNotification(item.name, item.currentStock, item.lowStockThreshold, item.unit).catch(() => {});
+      this.sendLowStockNotification(
+        item.name,
+        item.currentStock,
+        item.lowStockThreshold,
+        item.unit,
+        item.branchId,
+      ).catch(() => {});
     }
 
     return item;
   }
 
-  async update(id: string, dto: any) {
-    const item = await this.ingredientModel.findByIdAndUpdate(id, dto, { new: true }).lean();
-    if (!item) throw new NotFoundException('Ingredient not found');
-    return item;
+  async update(id: string, dto: any, scope: AuthUser) {
+    const existing = await this.ingredientModel.findById(id).lean();
+    if (!existing) throw new NotFoundException('Ingredient not found');
+    assertOwnsBranch(scope, existing as any);
+    // Don't let callers reassign branchId via update — that bypasses
+    // resolveBranchIdForCreate. branchId is set at creation only.
+    const safe = { ...dto };
+    delete (safe as any).branchId;
+    const item = await this.ingredientModel.findByIdAndUpdate(id, safe, { new: true }).lean();
+    return item!;
   }
 
-  async delete(id: string) {
+  async delete(id: string, scope: AuthUser) {
+    const existing = await this.ingredientModel.findById(id).lean();
+    if (!existing) throw new NotFoundException('Ingredient not found');
+    assertOwnsBranch(scope, existing as any);
     await this.ingredientModel.findByIdAndDelete(id);
     return { deleted: true };
   }
 
-  // ── FCM: send to all admin + manager tokens ─────────────────────────────────
-  private async sendLowStockNotification(name: string, current: number, threshold: number, unit: string) {
+  // ── FCM: send to admins (any branch) + managers of the same branch ─────────
+  private async sendLowStockNotification(
+    name: string,
+    current: number,
+    threshold: number,
+    unit: string,
+    branchId: string,
+  ) {
+    // Admins get every alert; managers only their own branch's. This is the
+    // multi-tenant version — the previous code blasted all managers globally.
     const admins = await this.userModel
-      .find({ role: { $in: ['admin', 'manager'] }, fcmToken: { $exists: true, $ne: null } })
+      .find({
+        $or: [
+          { role: 'admin' },
+          { role: 'manager', branchId },
+        ],
+        fcmToken: { $exists: true, $ne: null },
+      })
       .select('fcmToken')
       .lean();
 
