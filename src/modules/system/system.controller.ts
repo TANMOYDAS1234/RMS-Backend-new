@@ -40,7 +40,17 @@ export class SystemController {
       apiBaseUrl: computedOrigin,
       razorpay: {
         keyId: this.config.get<string>('RAZORPAY_KEY_ID') ?? '',
+        // Mobile-only flag — true when KEY_ID is set (the SDK signs
+        // client-side, no secret needed on the server). Kept for
+        // backwards compatibility with the existing mobile checkout.
         enabled: !!this.config.get<string>('RAZORPAY_KEY_ID'),
+        // Web flow needs BOTH the key id (sent to the browser) AND the
+        // key secret (used to call Razorpay's REST API + verify HMAC
+        // server-side). Customer Pay Now hides itself when this is
+        // false so the customer doesn't tap a broken button.
+        webEnabled:
+          !!this.config.get<string>('RAZORPAY_KEY_ID') &&
+          !!this.config.get<string>('RAZORPAY_KEY_SECRET'),
         environment: this.config.get<string>('RAZORPAY_ENV') ?? 'sandbox',
       },
       environment: this.config.get<string>('NODE_ENV') ?? 'development',

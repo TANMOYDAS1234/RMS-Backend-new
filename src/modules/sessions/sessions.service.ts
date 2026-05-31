@@ -403,8 +403,19 @@ export class SessionsService {
     }
     const keyId = this.config.get<string>('RAZORPAY_KEY_ID') ?? '';
     const keySecret = this.config.get<string>('RAZORPAY_KEY_SECRET') ?? '';
-    if (!keyId || !keySecret) {
-      throw new BadRequestException('Online payment is not configured.');
+    // Specific error so the operator knows which env var is missing.
+    // The mobile flow only ever needed KEY_ID (the SDK signed client-side);
+    // the web flow needs KEY_SECRET too so we can create the Razorpay
+    // Order via the REST API and verify HMAC server-side.
+    if (!keyId) {
+      throw new BadRequestException(
+        'Online payment is unavailable — RAZORPAY_KEY_ID env var is not set on the server.',
+      );
+    }
+    if (!keySecret) {
+      throw new BadRequestException(
+        'Online payment is unavailable — RAZORPAY_KEY_SECRET env var is not set on the server. Add it in Render and redeploy.',
+      );
     }
     const amountPaise = Math.round(total * 100);
     const razorpayOrder = await this._razorpayCreateOrder(
