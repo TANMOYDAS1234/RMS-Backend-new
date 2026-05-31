@@ -5,6 +5,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Order, OrderDocument, OrderStatus } from '../orders/order.schema';
 import { Bill, BillDocument } from '../billing/bill.schema';
+import { AuthUser, scopeFilter } from '../../common/scope/branch-scope';
 
 @Injectable()
 export class AnalyticsService {
@@ -13,9 +14,16 @@ export class AnalyticsService {
     @InjectModel(Bill.name) private billModel: Model<BillDocument>,
   ) {}
 
-  async getSalesSummary(from: Date, to: Date) {
+  // Every aggregate now starts with the multi-tenant filter so a manager
+  // only sees their own branch's analytics. Admin gets `{}` from
+  // scopeFilter and sees the whole chain. Without this the manager
+  // panel showed cross-branch totals (other branches' revenue, other
+  // branches' staff in the top performers list) — the analytics fix.
+
+  async getSalesSummary(from: Date, to: Date, scope?: AuthUser) {
+    const sf = scope ? scopeFilter(scope) : {};
     return this.billModel.aggregate([
-      { $match: { isPaid: true, paidAt: { $gte: from, $lte: to } } },
+      { $match: { ...sf, isPaid: true, paidAt: { $gte: from, $lte: to } } },
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m-%d', date: '$paidAt' } },
@@ -28,8 +36,12 @@ export class AnalyticsService {
     ]);
   }
 
-  async getPeakHours(from?: Date, to?: Date) {
-    const match: any = { status: { $in: [OrderStatus.PAID, OrderStatus.CLOSED] } };
+  async getPeakHours(from?: Date, to?: Date, scope?: AuthUser) {
+    const sf = scope ? scopeFilter(scope) : {};
+    const match: any = {
+      ...sf,
+      status: { $in: [OrderStatus.PAID, OrderStatus.CLOSED] },
+    };
     if (from || to) {
       match.createdAt = {};
       if (from) match.createdAt.$gte = from;
@@ -48,10 +60,12 @@ export class AnalyticsService {
     ]);
   }
 
-  async getTableTurnover(from: Date, to: Date) {
+  async getTableTurnover(from: Date, to: Date, scope?: AuthUser) {
+    const sf = scope ? scopeFilter(scope) : {};
     return this.orderModel.aggregate([
       {
         $match: {
+          ...sf,
           status: OrderStatus.CLOSED,
           createdAt: { $gte: from, $lte: to },
         },
@@ -68,14 +82,16 @@ export class AnalyticsService {
     ]);
   }
 
-  async getTopItems(limit = 10, from?: Date, to?: Date) {
+  async getTopItems(limit = 10, from?: Date, to?: Date, scope?: AuthUser) {
+    const sf = scope ? scopeFilter(scope) : {};
     const pipeline: any[] = [];
+    const match: any = { ...sf };
     if (from || to) {
-      const match: any = { createdAt: {} };
+      match.createdAt = {};
       if (from) match.createdAt.$gte = from;
       if (to) match.createdAt.$lte = to;
-      pipeline.push({ $match: match });
     }
+    if (Object.keys(match).length > 0) pipeline.push({ $match: match });
     pipeline.push(
       { $unwind: '$items' },
       {
@@ -92,10 +108,12 @@ export class AnalyticsService {
     return this.orderModel.aggregate(pipeline);
   }
 
-  async getStaffPerformance(from: Date, to: Date) {
+  async getStaffPerformance(from: Date, to: Date, scope?: AuthUser) {
+    const sf = scope ? scopeFilter(scope) : {};
     return this.orderModel.aggregate([
       {
         $match: {
+          ...sf,
           waiterId: { $exists: true },
           createdAt: { $gte: from, $lte: to },
         },
