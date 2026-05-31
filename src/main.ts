@@ -46,11 +46,19 @@ async function bootstrap() {
     : join(process.cwd(), 'public', 'web');
   if (fs.existsSync(webDir)) {
     app.useStaticAssets(webDir, {
-      // Anything under /t/* should be the SPA so deep links from the QR
-      // (https://host/t/<tableId>?branch=...) hit Flutter's router rather
-      // than 404-ing.
       fallthrough: true,
       index: ['index.html'],
+    });
+    // SPA fallback: a request like /t/<tableId>?branch=<branchId> isn't a
+    // real file, so useStaticAssets falls through → Nest router → 404.
+    // Send index.html instead and let Flutter's router (Uri.base) read
+    // the path. Scoped to /t/* on purpose so unknown API routes still
+    // return a real 404 with JSON instead of an HTML page.
+    const indexHtml = join(webDir, 'index.html');
+    const expressApp = app.getHttpAdapter().getInstance();
+    expressApp.get(/^\/t\/.+/, (_req: any, res: any, next: any) => {
+      if (fs.existsSync(indexHtml)) return res.sendFile(indexHtml);
+      return next();
     });
     logger.log(`Serving Flutter Web build from ${webDir}`);
   } else {
