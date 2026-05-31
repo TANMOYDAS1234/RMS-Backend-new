@@ -17,6 +17,13 @@ export class Ingredient {
   @Prop({ required: true, min: 0 }) lowStockThreshold: number;
   @Prop({ default: 0 }) costPerUnit: number;
 
+  // Set to true when a chef adds the ingredient under
+  // branch.chefCanManageInventory. Manager sees a "needs review" badge
+  // and clears it (POST /inventory/:id/approve) once they verify the
+  // cost + threshold. Pure audit trail — doesn't block stock adjustments
+  // in the meantime so the chef can keep working.
+  @Prop({ default: false }) pendingReview: boolean;
+
   // Audit trail for stock changes
   @Prop({
     type: [{ delta: Number, reason: String, by: String, at: Date }],

@@ -29,6 +29,15 @@ export class Branch {
   // on the kitchen display. Tunable per-branch because prep windows
   // differ — fast casual is 8, fine dining is 25, etc.
   @Prop({ default: 15, min: 1, max: 120 }) overdueAfterMinutes: number;
+
+  // Trusts the head chef to add/edit ingredients + set low-stock
+  // thresholds on this branch's inventory. Default off so a new branch
+  // ships with the standard separation-of-duties (manager places orders,
+  // chef only adjusts existing stock). Manager flips it on for small
+  // operations / proven chefs. Anything the chef adds while this is on
+  // gets pendingReview=true (see Ingredient schema) so the manager can
+  // audit cost/threshold numbers later.
+  @Prop({ default: false }) chefCanManageInventory: boolean;
 }
 
 export const BranchSchema = SchemaFactory.createForClass(Branch);
