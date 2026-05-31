@@ -1,11 +1,11 @@
 {
-    "name": "rms_app",
-    "short_name": "rms_app",
+    "name": "Dine Ops",
+    "short_name": "Dine Ops",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#1A1108",
     "theme_color": "#C87B3A",
-    "description": "A new Flutter project.",
+    "description": "Dine Ops — Restaurant Operations, Reimagined.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

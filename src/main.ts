@@ -48,16 +48,32 @@ async function bootstrap() {
     app.useStaticAssets(webDir, {
       fallthrough: true,
       index: ['index.html'],
+      // Hashed Flutter assets (main.dart.js, canvaskit/*, etc.) have
+      // content-derived filenames so they're safe to cache forever.
+      // index.html and the service worker MUST NOT be cached or the
+      // client keeps loading the previous build for hours after a
+      // deploy — exactly the "I deployed but my fix isn't live" failure
+      // mode users keep hitting on this app.
+      setHeaders: (res, path) => {
+        const lower = path.toLowerCase();
+        const noCache =
+          lower.endsWith('/index.html') ||
+          lower.endsWith('flutter_service_worker.js') ||
+          lower.endsWith('flutter_bootstrap.js') ||
+          lower.endsWith('manifest.json') ||
+          lower.endsWith('version.json');
+        if (noCache) {
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        }
+      },
     });
-    // SPA fallback: a request like /t/<tableId>?branch=<branchId> isn't a
-    // real file, so useStaticAssets falls through → Nest router → 404.
-    // Send index.html instead and let Flutter's router (Uri.base) read
-    // the path. Scoped to /t/* on purpose so unknown API routes still
-    // return a real 404 with JSON instead of an HTML page.
     const indexHtml = join(webDir, 'index.html');
     const expressApp = app.getHttpAdapter().getInstance();
     expressApp.get(/^\/t\/.+/, (_req: any, res: any, next: any) => {
-      if (fs.existsSync(indexHtml)) return res.sendFile(indexHtml);
+      if (fs.existsSync(indexHtml)) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        return res.sendFile(indexHtml);
+      }
       return next();
     });
     logger.log(`Serving Flutter Web build from ${webDir}`);
