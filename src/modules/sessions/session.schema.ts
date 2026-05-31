@@ -20,6 +20,17 @@ export class TableSession {
   @Prop({ enum: SessionStatus, default: SessionStatus.ACTIVE })
   status: SessionStatus;
 
+  // Multi-party support. One physical table can host N independent
+  // parties simultaneously (each with their own bill), as long as the
+  // sum of partySize across active sessions ≤ table.capacity. A "Party A
+  // (2 ppl), Party B (1 ppl)" table of capacity 4 still has 1 free seat.
+  @Prop({ default: 1, min: 1 }) partySize: number;
+
+  // Human-readable tag for the party: "A", "B", "C", … Auto-assigned per
+  // table as parties come and go (resets when the table is empty).
+  // Optional — clients can just show "Party 1" off the index if missing.
+  @Prop({ default: '' }) partyLabel: string;
+
   @Prop({ type: [String], default: [] }) orderIds: string[];
 
   @Prop({ type: [{ deviceId: String, joinedAt: Date }], default: [] })

@@ -4,7 +4,7 @@ import {
   Controller, Post, Get, Patch, Body, Param, Query, Request, UseGuards, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { IsOptional, IsString } from 'class-validator';
+import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { SessionsService } from './sessions.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -14,6 +14,10 @@ class ScanQrDto {
   @IsString() tableId: string;
   @IsString() branchId: string;
   @IsString() deviceId: string;
+  /** How many people in this party. Omit on the first call — the server
+   * will respond with a `needsPartySize: true` envelope so the client
+   * can show "How many of you?" before retrying with the chosen size. */
+  @IsOptional() @IsInt() @Min(1) @Max(99) partySize?: number;
 }
 
 class CallWaiterDto {
@@ -32,13 +36,29 @@ export class SessionsController {
   @Throttle({ medium: { limit: 30, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   scan(@Body() dto: ScanQrDto) {
-    return this.sessionsService.getOrCreate(dto.tableId, dto.branchId, dto.deviceId);
+    return this.sessionsService.getOrCreate(
+      dto.tableId,
+      dto.branchId,
+      dto.deviceId,
+      dto.partySize,
+    );
   }
 
-  // GET /sessions/table/:tableId  — poll active session
+  // GET /sessions/table/:tableId  — poll active session (singular, for
+  // back-compat with older clients). Multi-party clients should call
+  // /sessions/table/:tableId/capacity instead.
   @Get('table/:tableId')
   getActive(@Param('tableId') tableId: string) {
     return this.sessionsService.getActiveSession(tableId);
+  }
+
+  // GET /sessions/table/:tableId/capacity
+  // How many seats are free + what parties are currently seated. Public:
+  // the customer app uses it when showing "Joining a busy table" before
+  // the party-size picker. Lightweight enough to be poll-friendly.
+  @Get('table/:tableId/capacity')
+  capacity(@Param('tableId') tableId: string) {
+    return this.sessionsService.getCapacity(tableId);
   }
 
   // GET /sessions/:id/bill  — public, read-only aggregate of all orders

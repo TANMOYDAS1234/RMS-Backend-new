@@ -27,16 +27,30 @@ export class SessionsService {
   ) {}
 
   /**
-   * QR scan entry point.
-   * - Verifies the table belongs to the claimed branch (no cross-branch
-   *   forgery via swapped query params).
-   * - Verifies branch is active and QR ordering is enabled (respects the
-   *   admin feature toggle + time window).
-   * - Resumes active session if one exists.
-   * - Blocks if bill is pending.
-   * - Creates new session otherwise.
+   * QR scan entry point — multi-party aware.
+   *
+   * Flow:
+   *  1. Validate branch ownership of the table + QR feature gate.
+   *  2. Resume: if any active session on this table already has this
+   *     deviceId in its participants, return that session unchanged.
+   *  3. New party path: needs `partySize`. If the caller didn't supply
+   *     one, return a `needsPartySize` envelope with current capacity
+   *     info so the customer app can show "How many of you?".
+   *  4. Capacity check: sum(activeSessions.partySize) + requested ≤
+   *     table.capacity. Reject the new party if it would oversell.
+   *  5. Create a fresh session with the next sequential partyLabel
+   *     ("A", "B", "C", …). Resets implicitly once all parties leave.
+   *
+   * billPending blocks new parties from joining the *same* session, but
+   * a different party (different deviceId) is fine — their own session
+   * isn't billed yet.
    */
-  async getOrCreate(tableId: string, branchId: string, deviceId: string) {
+  async getOrCreate(
+    tableId: string,
+    branchId: string,
+    deviceId: string,
+    partySize?: number,
+  ): Promise<any> {
     const table = await this.tablesService.findById(tableId);
 
     // Reject if the QR URL's branchId doesn't actually own the table.
@@ -53,22 +67,63 @@ export class SessionsService {
       );
     }
 
-    const existing = await this.sessionModel.findOne({
+    const activeSessions = await this.sessionModel.find({
       tableId,
       status: SessionStatus.ACTIVE,
     });
 
-    if (existing) {
-      if (existing.billPending) {
-        throw new ConflictException('Bill is pending. Please complete payment before placing new orders.');
+    // 1. Resume — device already participates in some party here.
+    const own = activeSessions.find((s) =>
+      s.participants.some((p) => p.deviceId === deviceId),
+    );
+    if (own) {
+      if (own.billPending) {
+        throw new ConflictException(
+          'Bill is pending. Please complete payment before placing new orders.',
+        );
       }
-      const alreadyJoined = existing.participants.some((p) => p.deviceId === deviceId);
-      if (!alreadyJoined) {
-        existing.participants.push({ deviceId, joinedAt: new Date() });
-        await existing.save();
-      }
-      return existing;
+      return own;
     }
+
+    const capacity = (table as any).capacity ?? 1;
+    const occupied = activeSessions.reduce(
+      (s, x) => s + (x.partySize ?? 1),
+      0,
+    );
+    const remaining = Math.max(0, capacity - occupied);
+
+    // 2. No party size yet — tell the client to ask.
+    if (partySize == null || partySize <= 0) {
+      return {
+        needsPartySize: true,
+        tableId,
+        tableLabel: table.label,
+        branchId,
+        capacity,
+        occupied,
+        remaining,
+        activeParties: activeSessions.map((s) => ({
+          partyLabel: s.partyLabel || '?',
+          partySize: s.partySize ?? 1,
+        })),
+      };
+    }
+
+    // 3. Capacity check — refuse to oversell.
+    if (partySize > remaining) {
+      throw new ConflictException(
+        remaining === 0
+          ? 'This table is full. Please ask a server for another table.'
+          : `Only ${remaining} seat${remaining === 1 ? '' : 's'} free at this table.`,
+      );
+    }
+
+    // 4. Assign the next free party label (A → B → C …). Cap at "Z"; once
+    // we wrap around we fall back to the empty string and clients render
+    // "Party (party#)" off the index.
+    const usedLabels = new Set(activeSessions.map((s) => s.partyLabel));
+    const nextLabel =
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').find((c) => !usedLabels.has(c)) ?? '';
 
     const expiresAt = new Date(Date.now() + SESSION_TTL_MINUTES * 60 * 1000);
     return this.sessionModel.create({
@@ -76,8 +131,41 @@ export class SessionsService {
       tableLabel: table.label,
       branchId,
       expiresAt,
+      partySize,
+      partyLabel: nextLabel,
       participants: [{ deviceId, joinedAt: new Date() }],
     });
+  }
+
+  /**
+   * Read-only capacity view. Used by the customer app to render
+   * "Joining a busy table — 2 free seats" before showing the
+   * party-size picker, and by the floor grid to render N parties per
+   * table.
+   */
+  async getCapacity(tableId: string) {
+    const table = await this.tablesService.findById(tableId);
+    const activeSessions = await this.sessionModel
+      .find({ tableId, status: SessionStatus.ACTIVE })
+      .lean();
+    const capacity = (table as any).capacity ?? 1;
+    const occupied = activeSessions.reduce(
+      (s, x) => s + (x.partySize ?? 1),
+      0,
+    );
+    return {
+      tableId,
+      tableLabel: table.label,
+      capacity,
+      occupied,
+      remaining: Math.max(0, capacity - occupied),
+      activeParties: activeSessions.map((s) => ({
+        sessionId: (s._id as any).toString(),
+        partyLabel: s.partyLabel || '',
+        partySize: s.partySize ?? 1,
+        billPending: s.billPending ?? false,
+      })),
+    };
   }
 
   async addOrder(sessionId: string, orderId: string) {
@@ -90,22 +178,39 @@ export class SessionsService {
     return session;
   }
 
-  async markBillPending(tableId: string) {
+  /** Mark a specific party's bill pending. Doesn't affect other parties
+   * sitting at the same physical table. */
+  async markBillPending(sessionId: string) {
     await this.sessionModel.updateOne(
-      { tableId, status: SessionStatus.ACTIVE },
+      { _id: sessionId, status: SessionStatus.ACTIVE },
       { billPending: true },
     );
   }
 
-  async closeSession(tableId: string) {
+  /** Close a specific party. Other parties at the same table remain
+   * active. The customer's QR for that party stops accepting new orders. */
+  async closeSession(sessionId: string) {
     await this.sessionModel.updateOne(
-      { tableId, status: SessionStatus.ACTIVE },
+      { _id: sessionId, status: SessionStatus.ACTIVE },
       { status: SessionStatus.CLOSED },
     );
   }
 
+  /** Backward-compat singular getter: returns ANY active session at the
+   * table (the first one found). Callers that need every party should
+   * use `getActiveSessionsForTable` or `getCapacity` instead. */
   async getActiveSession(tableId: string) {
-    return this.sessionModel.findOne({ tableId, status: SessionStatus.ACTIVE }).lean();
+    return this.sessionModel
+      .findOne({ tableId, status: SessionStatus.ACTIVE })
+      .lean();
+  }
+
+  /** Every active party at this table. Used by the floor grid to render
+   * sub-cards per party. */
+  async getActiveSessionsForTable(tableId: string) {
+    return this.sessionModel
+      .find({ tableId, status: SessionStatus.ACTIVE })
+      .lean();
   }
 
   /**
