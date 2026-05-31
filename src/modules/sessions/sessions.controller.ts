@@ -1,16 +1,23 @@
 // ─── Sessions Controller ──────────────────────────────────────────────────────
 
 import {
-  Controller, Post, Get, Patch, Body, Param, HttpCode, HttpStatus,
+  Controller, Post, Get, Patch, Body, Param, Query, Request, UseGuards, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { IsString } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
 import { SessionsService } from './sessions.service';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
 
 class ScanQrDto {
   @IsString() tableId: string;
   @IsString() branchId: string;
   @IsString() deviceId: string;
+}
+
+class CallWaiterDto {
+  @IsOptional() @IsString() reason?: string;
 }
 
 // Public — no JWT required (customer QR flow). Each endpoint is throttled
@@ -47,5 +54,42 @@ export class SessionsController {
   @Patch(':id/refresh')
   refresh(@Param('id') id: string) {
     return this.sessionsService.refreshExpiry(id);
+  }
+
+  // POST /sessions/:id/call-waiter — customer taps "Call waiter" from QR
+  // ordering screen. Public, throttled hard because it's a public push
+  // trigger. Service dedups so a customer mashing the button doesn't
+  // wake every waiter twice.
+  @Post(':id/call-waiter')
+  @Throttle({ short: { limit: 3, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  callWaiter(@Param('id') id: string, @Body() dto: CallWaiterDto) {
+    return this.sessionsService.callWaiter(id, dto.reason);
+  }
+
+  // GET /sessions/help-requests?branchId=...
+  // Waiter inbox. Returns every open (unresolved) help request across
+  // active sessions in the caller's branch.
+  @Get('help-requests')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'manager', 'waiter')
+  listHelpRequests(@Query('branchId') branchId: string, @Request() req: any) {
+    // Manager/waiter can only ever see their own branch; admin may pass
+    // any branchId. We default to the caller's own when omitted.
+    const target = branchId || req.user?.branchId;
+    if (!target) return [];
+    return this.sessionsService.listHelpRequests(target);
+  }
+
+  // PATCH /sessions/:id/help/:helpId/resolve
+  @Patch(':id/help/:helpId/resolve')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'manager', 'waiter')
+  resolveHelp(
+    @Param('id') id: string,
+    @Param('helpId') helpId: string,
+    @Request() req: any,
+  ) {
+    return this.sessionsService.resolveHelpRequest(id, helpId, req.user._id);
   }
 }

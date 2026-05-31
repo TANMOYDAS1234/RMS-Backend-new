@@ -19,6 +19,7 @@ import { PaymentGatewayModule } from './modules/billing/payment-gateway/payment-
 import { StorageModule } from './common/storage/storage.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { CashDrawerModule } from './modules/cash-drawer/cash-drawer.module';
+import { SystemModule } from './modules/system/system.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { IdempotencyInterceptor } from './common/interceptors/idempotency.interceptor';
 import { AppController } from './app.controller';
@@ -54,6 +55,7 @@ import { AppController } from './app.controller';
     StorageModule,
     NotificationsModule,
     CashDrawerModule,
+    SystemModule,
   ],
   controllers: [AppController],
   providers: [

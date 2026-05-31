@@ -11,6 +11,9 @@ import { Model } from 'mongoose';
 import { TableSession, SessionDocument, SessionStatus } from './session.schema';
 import { TablesService } from '../tables/tables.service';
 import { BranchesService } from '../branches/branches.service';
+import { NotificationsService, NotificationType } from '../notifications/notifications.service';
+import { Inject, forwardRef } from '@nestjs/common';
+import * as crypto from 'crypto';
 
 const SESSION_TTL_MINUTES = 30;
 
@@ -20,6 +23,7 @@ export class SessionsService {
     @InjectModel(TableSession.name) private sessionModel: Model<SessionDocument>,
     private tablesService: TablesService,
     private branchesService: BranchesService,
+    private notifications: NotificationsService,
   ) {}
 
   /**
@@ -102,6 +106,98 @@ export class SessionsService {
 
   async getActiveSession(tableId: string) {
     return this.sessionModel.findOne({ tableId, status: SessionStatus.ACTIVE }).lean();
+  }
+
+  /**
+   * Customer-initiated "call a waiter" event. Fires a FCM push to every
+   * waiter in the session's branch and appends an entry to the session's
+   * helpRequests array so the waiter dashboard can show a pending inbox.
+   *
+   * Throttled at the controller level (public endpoint). We additionally
+   * dedup here: if there's already an unresolved request in the last
+   * minute, skip the push so a customer mashing the button doesn't blast
+   * the whole waiter team.
+   */
+  async callWaiter(sessionId: string, reason?: string) {
+    const session = await this.sessionModel.findById(sessionId);
+    if (!session) throw new NotFoundException('Session not found');
+    if (session.status !== SessionStatus.ACTIVE) {
+      throw new ForbiddenException('Session is no longer active.');
+    }
+
+    const now = Date.now();
+    const recent = session.helpRequests.find(
+      (h) => !h.resolvedAt && now - new Date(h.at).getTime() < 60_000,
+    );
+    if (recent) {
+      // Already pending — no-op so we don't fan out a second push.
+      return { acknowledged: true, deduped: true };
+    }
+
+    const id = crypto.randomBytes(8).toString('hex');
+    session.helpRequests.push({
+      id,
+      at: new Date(),
+      reason: reason?.slice(0, 200),
+    });
+    await session.save();
+
+    this.notifications.send(
+      { roles: ['waiter'], branchId: session.branchId },
+      {
+        type: NotificationType.ORDER_READY, // reuses the high-priority "orders_ready" channel
+        title: `Customer needs assistance — ${session.tableLabel}`,
+        body: reason?.trim().length ? reason!.trim() : 'Help requested at table.',
+        data: {
+          sessionId: session._id.toString(),
+          tableId: session.tableId,
+          tableLabel: session.tableLabel,
+          branchId: session.branchId,
+          helpId: id,
+          kind: 'CALL_WAITER',
+        },
+      },
+    );
+
+    return { acknowledged: true, helpId: id };
+  }
+
+  /** Branch waiter inbox — open help requests across every active session. */
+  async listHelpRequests(branchId: string) {
+    const sessions = await this.sessionModel
+      .find({ branchId, status: SessionStatus.ACTIVE })
+      .lean();
+    const open: any[] = [];
+    for (const s of sessions) {
+      for (const h of s.helpRequests ?? []) {
+        if (!h.resolvedAt) {
+          open.push({
+            sessionId: (s._id as any).toString(),
+            tableId: s.tableId,
+            tableLabel: s.tableLabel,
+            helpId: h.id,
+            at: h.at,
+            reason: h.reason,
+          });
+        }
+      }
+    }
+    open.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+    return open;
+  }
+
+  /** Waiter dismisses a help request after attending the table. */
+  async resolveHelpRequest(sessionId: string, helpId: string, waiterId: string) {
+    const session = await this.sessionModel.findById(sessionId);
+    if (!session) throw new NotFoundException('Session not found');
+    const entry = session.helpRequests.find((h) => h.id === helpId);
+    if (!entry) throw new NotFoundException('Help request not found');
+    if (entry.resolvedAt) return { resolved: true, alreadyResolved: true };
+    entry.resolvedAt = new Date();
+    entry.resolvedBy = waiterId;
+    session.markModified('helpRequests');
+    await session.save();
+    return { resolved: true };
   }
 
   // Extend TTL on activity

@@ -25,7 +25,7 @@ export class BranchesService {
     return this.branchModel.create(dto);
   }
 
-  async update(id: string, dto: Partial<{ name: string; address: string; slug: string; gstRate: number; isActive: boolean }>) {
+  async update(id: string, dto: Partial<{ name: string; address: string; slug: string; gstRate: number; isActive: boolean; overdueAfterMinutes: number }>) {
     const b = await this.branchModel.findByIdAndUpdate(id, dto, { new: true }).lean();
     if (!b) throw new NotFoundException('Branch not found');
     return b;

@@ -24,6 +24,11 @@ export class Branch {
   @Prop({ default: true }) isActive: boolean;
   @Prop({ type: FeatureToggles, default: () => ({}) }) features: FeatureToggles;
   @Prop({ default: 0.18 }) gstRate: number;
+
+  // Minutes after which a confirmed/preparing order is flagged "overdue"
+  // on the kitchen display. Tunable per-branch because prep windows
+  // differ — fast casual is 8, fine dining is 25, etc.
+  @Prop({ default: 15, min: 1, max: 120 }) overdueAfterMinutes: number;
 }
 
 export const BranchSchema = SchemaFactory.createForClass(Branch);

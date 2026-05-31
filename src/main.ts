@@ -36,6 +36,27 @@ async function bootstrap() {
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
   app.useStaticAssets(uploadsDir, { prefix: '/uploads' });
 
+  // Serve the Flutter Web build out of public/web when present (the deploy
+  // pipeline copies flutter_app/build/web there). This makes the customer
+  // QR app reachable at the same origin as the API — one Render service
+  // serves both, no separate static-site deploy needed, and the QR code
+  // generator can fall back to req.host without extra env wiring.
+  const webDir = process.env.WEB_BUILD_DIR
+    ? join(process.cwd(), process.env.WEB_BUILD_DIR)
+    : join(process.cwd(), 'public', 'web');
+  if (fs.existsSync(webDir)) {
+    app.useStaticAssets(webDir, {
+      // Anything under /t/* should be the SPA so deep links from the QR
+      // (https://host/t/<tableId>?branch=...) hit Flutter's router rather
+      // than 404-ing.
+      fallthrough: true,
+      index: ['index.html'],
+    });
+    logger.log(`Serving Flutter Web build from ${webDir}`);
+  } else {
+    logger.log(`Flutter Web build not present at ${webDir} — API only.`);
+  }
+
   const swaggerConfig = new DocumentBuilder()
     .setTitle('RMS Backend API')
     .setDescription('Restaurant Management System — REST + WebSocket API')

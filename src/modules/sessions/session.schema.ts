@@ -29,6 +29,31 @@ export class TableSession {
 
   // Blocks new session creation when bill is pending
   @Prop({ default: false }) billPending: boolean;
+
+  // Call-waiter inbox. Customer taps "Call waiter" → entry pushed here →
+  // waiter sees it in the dashboard inbox and dismisses with resolvedAt.
+  // Kept on the session (not a separate collection) so the customer's
+  // app can show a "your waiter has been notified" badge without an
+  // extra round trip.
+  @Prop({
+    type: [
+      {
+        id: String,
+        at: Date,
+        reason: String,
+        resolvedAt: Date,
+        resolvedBy: String,
+      },
+    ],
+    default: [],
+  })
+  helpRequests: {
+    id: string;
+    at: Date;
+    reason?: string;
+    resolvedAt?: Date;
+    resolvedBy?: string;
+  }[];
 }
 
 export const SessionSchema = SchemaFactory.createForClass(TableSession);

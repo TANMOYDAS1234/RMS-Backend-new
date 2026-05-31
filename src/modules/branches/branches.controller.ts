@@ -14,6 +14,7 @@ class UpdateBranchDto {
   @IsOptional() @IsString() slug?: string;
   @IsOptional() @IsNumber() gstRate?: number;
   @IsOptional() isActive?: boolean;
+  @IsOptional() @IsNumber() overdueAfterMinutes?: number;
 }
 
 @Controller('branches')
