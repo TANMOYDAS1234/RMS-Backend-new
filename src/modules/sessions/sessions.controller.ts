@@ -24,6 +24,12 @@ class CallWaiterDto {
   @IsOptional() @IsString() reason?: string;
 }
 
+class VerifyPaymentDto {
+  @IsString() razorpayOrderId: string;
+  @IsString() razorpayPaymentId: string;
+  @IsString() razorpaySignature: string;
+}
+
 // Public — no JWT required (customer QR flow). Each endpoint is throttled
 // independently because they're publicly reachable.
 @Controller('sessions')
@@ -99,6 +105,31 @@ export class SessionsController {
     const target = branchId || req.user?.branchId;
     if (!target) return [];
     return this.sessionsService.listHelpRequests(target);
+  }
+
+  // POST /sessions/:id/pay/init — customer self-pay via Razorpay
+  // Creates a Razorpay order for the session's outstanding total. Public
+  // (no JWT) because the customer is on a web QR page with no login.
+  // Throttled — one customer doesn't need to spin up payment orders in a
+  // loop, and Razorpay charges per attempt.
+  @Post(':id/pay/init')
+  @Throttle({ short: { limit: 6, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  payInit(@Param('id') id: string) {
+    return this.sessionsService.initPayment(id);
+  }
+
+  // POST /sessions/:id/pay/verify — verify HMAC + close the session as paid.
+  @Post(':id/pay/verify')
+  @Throttle({ short: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  payVerify(@Param('id') id: string, @Body() dto: VerifyPaymentDto) {
+    return this.sessionsService.verifyPayment(
+      id,
+      dto.razorpayOrderId,
+      dto.razorpayPaymentId,
+      dto.razorpaySignature,
+    );
   }
 
   // PATCH /sessions/:id/help/:helpId/resolve

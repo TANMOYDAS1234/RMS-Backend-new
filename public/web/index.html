@@ -31,6 +31,10 @@
 
   <title>Dine Ops</title>
   <link rel="manifest" href="manifest.json">
+  <!-- Razorpay Standard Checkout — used by the customer "Pay Now" flow
+       on the QR ordering page. The Flutter razorpay_flutter package is
+       mobile-only, so on web we use the official Checkout JS instead. -->
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 </head>
 <body>
   <!--

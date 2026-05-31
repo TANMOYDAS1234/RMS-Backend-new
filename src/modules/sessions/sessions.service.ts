@@ -5,7 +5,9 @@ import {
   NotFoundException,
   ConflictException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { TableSession, SessionDocument, SessionStatus } from './session.schema';
@@ -14,6 +16,7 @@ import { BranchesService } from '../branches/branches.service';
 import { NotificationsService, NotificationType } from '../notifications/notifications.service';
 import { Inject, forwardRef } from '@nestjs/common';
 import * as crypto from 'crypto';
+import * as https from 'https';
 
 const SESSION_TTL_MINUTES = 30;
 
@@ -24,6 +27,7 @@ export class SessionsService {
     private tablesService: TablesService,
     private branchesService: BranchesService,
     private notifications: NotificationsService,
+    private config: ConfigService,
   ) {}
 
   /**
@@ -364,5 +368,157 @@ export class SessionsService {
       discountAmount,
       total,
     };
+  }
+
+  // ── Customer self-pay (Razorpay) ────────────────────────────────────────
+  //
+  // Two endpoints make up the customer-facing payment flow on the web
+  // QR ordering page:
+  //
+  //  1) initPayment  → creates a Razorpay Order for the session's running
+  //     total, returns the keyId + Razorpay orderId. The web client passes
+  //     these to Razorpay Checkout.
+  //  2) verifyPayment → after Checkout signs the payment, verify the HMAC
+  //     SHA256 server-side, then mark every order linked to the session as
+  //     paid and close the session. Idempotent on razorpayPaymentId.
+  //
+  // razorpay_flutter is mobile-only; the web build couldn't reuse it. So
+  // we use Razorpay's standard Checkout JS on the web side and these two
+  // public endpoints on the server side. No SDK dependency — Razorpay's
+  // REST API is two requests away on raw https.
+
+  /** Create a Razorpay order for the session's total. */
+  async initPayment(sessionId: string): Promise<{
+    keyId: string;
+    razorpayOrderId: string;
+    amount: number;
+    currency: string;
+    sessionId: string;
+    tableLabel: string;
+  }> {
+    const bill = await this.getSessionBill(sessionId);
+    const total = Number(bill.total) || 0;
+    if (total <= 0) {
+      throw new BadRequestException('No outstanding balance on this session.');
+    }
+    const keyId = this.config.get<string>('RAZORPAY_KEY_ID') ?? '';
+    const keySecret = this.config.get<string>('RAZORPAY_KEY_SECRET') ?? '';
+    if (!keyId || !keySecret) {
+      throw new BadRequestException('Online payment is not configured.');
+    }
+    const amountPaise = Math.round(total * 100);
+    const razorpayOrder = await this._razorpayCreateOrder(
+      keyId,
+      keySecret,
+      amountPaise,
+      `sess_${sessionId.slice(-8)}`,
+    );
+    return {
+      keyId,
+      razorpayOrderId: razorpayOrder.id,
+      amount: amountPaise,
+      currency: 'INR',
+      sessionId,
+      tableLabel: bill.tableLabel,
+    };
+  }
+
+  /** Verify the Checkout signature and close the session as paid. */
+  async verifyPayment(
+    sessionId: string,
+    razorpayOrderId: string,
+    razorpayPaymentId: string,
+    razorpaySignature: string,
+  ): Promise<{ verified: true }> {
+    const session = await this.sessionModel.findById(sessionId);
+    if (!session) throw new NotFoundException('Session not found');
+
+    const keySecret = this.config.get<string>('RAZORPAY_KEY_SECRET') ?? '';
+    if (!keySecret) throw new BadRequestException('Online payment not configured.');
+
+    const expected = crypto
+      .createHmac('sha256', keySecret)
+      .update(`${razorpayOrderId}|${razorpayPaymentId}`)
+      .digest('hex');
+    if (expected !== razorpaySignature) {
+      throw new BadRequestException('Payment signature invalid.');
+    }
+
+    // Mark every order on this session as PAID + close the session.
+    // Done via the raw collection to avoid a circular import on OrdersService.
+    const orderModel = (this.sessionModel.db as any).model('Order');
+    await orderModel.updateMany(
+      { _id: { $in: session.orderIds } },
+      { $set: { status: 'paid' } },
+    );
+    session.status = SessionStatus.CLOSED;
+    session.billPending = false;
+    await session.save();
+
+    // Notify the cashier+manager so the floor view updates promptly even
+    // without a WebSocket push from the order layer.
+    this.notifications.send(
+      { roles: ['cashier', 'manager'], branchId: session.branchId },
+      {
+        type: NotificationType.PAYMENT_RECEIVED,
+        title: `Payment received — ${session.tableLabel}`,
+        body: 'Customer paid via QR. Session closed.',
+        data: {
+          sessionId: session._id.toString(),
+          tableId: session.tableId,
+          branchId: session.branchId,
+          razorpayPaymentId,
+        },
+      },
+    );
+    return { verified: true };
+  }
+
+  /** Raw POST https://api.razorpay.com/v1/orders. */
+  private _razorpayCreateOrder(
+    keyId: string,
+    keySecret: string,
+    amountPaise: number,
+    receipt: string,
+  ): Promise<{ id: string; amount: number; status: string }> {
+    return new Promise((resolve, reject) => {
+      const body = JSON.stringify({
+        amount: amountPaise,
+        currency: 'INR',
+        receipt,
+        payment_capture: 1,
+      });
+      const auth = Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+      const req = https.request(
+        {
+          hostname: 'api.razorpay.com',
+          path: '/v1/orders',
+          method: 'POST',
+          headers: {
+            Authorization: `Basic ${auth}`,
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(body),
+          },
+        },
+        (res) => {
+          let data = '';
+          res.on('data', (c) => (data += c));
+          res.on('end', () => {
+            try {
+              const parsed = JSON.parse(data);
+              if (res.statusCode && res.statusCode >= 400) {
+                return reject(new Error(parsed?.error?.description ?? 'Razorpay error'));
+              }
+              resolve(parsed);
+            } catch (e) {
+              reject(e);
+            }
+          });
+        },
+      );
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    });
   }
 }
