@@ -159,6 +159,16 @@ export class UsersController {
     @Request() req: any,
   ) {
     if (!file) throw new BadRequestException('No file uploaded');
+    // Defense-in-depth: admin can only change THEIR OWN photo via this
+    // endpoint. They view but can't edit other users' photos — staff
+    // members change their own via POST /users/me/photo. Without this
+    // guard a leaked admin token would be a free PII-replacement
+    // vector across the org.
+    if (req.user._id?.toString?.() !== id) {
+      throw new BadRequestException(
+        'Photos can only be changed by the user themselves. Use /users/me/photo.',
+      );
+    }
     return this.usersService.uploadPhoto(id, file, req.user);
   }
 
