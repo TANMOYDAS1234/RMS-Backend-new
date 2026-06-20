@@ -29,6 +29,10 @@ export enum NotificationType {
   ORDER_SERVED = 'ORDER_SERVED',
   PAYMENT_RECEIVED = 'PAYMENT_RECEIVED',
   LOW_STOCK = 'LOW_STOCK',
+  // Fires when a chef adds a new ingredient under the per-branch
+  // chefCanManageInventory toggle. Routes to manager+admin so they
+  // know to audit the cost + threshold values the chef entered.
+  CHEF_INGREDIENT_PENDING_REVIEW = 'CHEF_INGREDIENT_PENDING_REVIEW',
 }
 
 /** Per-type channel ids — match the Flutter AndroidNotificationChannel defs. */
@@ -38,6 +42,8 @@ const CHANNEL_FOR: Record<NotificationType, string> = {
   [NotificationType.ORDER_SERVED]: 'orders_served',
   [NotificationType.PAYMENT_RECEIVED]: 'payments',
   [NotificationType.LOW_STOCK]: 'low_stock',
+  // Reuses low_stock channel — non-urgent but still surfaced.
+  [NotificationType.CHEF_INGREDIENT_PENDING_REVIEW]: 'low_stock',
 };
 
 export interface RecipientFilter {

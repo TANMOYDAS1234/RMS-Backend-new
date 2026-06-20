@@ -190,15 +190,20 @@ export class OrdersService {
       .lean();
   }
 
-  async getById(id: string): Promise<Order> {
+  async getById(id: string, scope?: AuthUser): Promise<Order> {
     const order = await this.orderModel.findById(id).lean();
     if (!order) throw new NotFoundException(`Order ${id} not found`);
+    // Block cross-branch reads. Admin (scopeFilter is {}) passes through;
+    // anyone else without the matching branchId hits the ForbiddenException
+    // helper. Undefined scope falls through to support internal callers.
+    if (scope) assertOwnsBranch(scope, order as any);
     return order;
   }
 
   async updateStatus(
     id: string,
     dto: UpdateStatusDto,
+    scope: AuthUser,
     userId: string,
     idempotencyKey: string,
   ): Promise<Order> {
@@ -219,6 +224,10 @@ export class OrdersService {
         .session(session);
 
       if (!order) throw new NotFoundException(`Order ${id} not found`);
+
+      // Branch ownership: a manager/waiter from branch B cannot mutate a
+      // branch-A order's status. Admin passes through.
+      assertOwnsBranch(scope, order as any);
 
       // Optimistic locking check
       if (order.version !== dto.version) {
@@ -361,11 +370,24 @@ export class OrdersService {
     itemId: string,
     progress: number,
     userId: string,
+    scope?: AuthUser,
   ): Promise<void> {
+    // Branch ownership + load the order so we can route the WS event
+    // to the right rooms (chef cohort of the order's branch, plus the
+    // customer's table) instead of broadcasting globally.
+    const order = await this.orderModel.findById(orderId).lean();
+    if (!order) throw new NotFoundException(`Order ${orderId} not found`);
+    if (scope) assertOwnsBranch(scope, order as any);
     await this.orderModel.updateOne(
       { _id: orderId, 'items.itemId': itemId },
       { $set: { 'items.$.progress': progress } },
     );
-    this.gateway.emitKitchenProgress({ orderId, itemId, progress });
+    this.gateway.emitKitchenProgress({
+      orderId,
+      itemId,
+      progress,
+      branchId: (order as any).branchId,
+      tableId: (order as any).tableId,
+    });
   }
 }

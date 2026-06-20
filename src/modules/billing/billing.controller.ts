@@ -49,19 +49,31 @@ export class BillingController {
     };
   }
 
+  // All three reads now pass req.user so the service can branch-scope.
+  // Before this fix a manager (or cashier) could see bills from every
+  // branch; daily revenue rolled up the whole chain.
   @Get()
   @Roles('admin', 'manager', 'cashier')
-  findAll(@Query('isPaid') isPaid?: string) {
-    return this.billingService.findAll(isPaid !== undefined ? isPaid === 'true' : undefined);
+  findAll(@Query('isPaid') isPaid?: string, @Request() req?: any) {
+    return this.billingService.findAll(
+      isPaid !== undefined ? isPaid === 'true' : undefined,
+      req?.user,
+    );
   }
 
+  // Cashier added to roles — they need today's revenue on their billing
+  // dashboard. Manager + admin already had it.
   @Get('revenue/daily')
-  @Roles('admin', 'manager')
-  dailyRevenue() { return this.billingService.getDailyRevenue(); }
+  @Roles('admin', 'manager', 'cashier')
+  dailyRevenue(@Request() req: any) {
+    return this.billingService.getDailyRevenue(req.user);
+  }
 
   @Get('order/:orderId')
   @Roles('admin', 'manager', 'cashier', 'waiter')
-  findByOrder(@Param('orderId') orderId: string) { return this.billingService.findByOrder(orderId); }
+  findByOrder(@Param('orderId') orderId: string, @Request() req: any) {
+    return this.billingService.findByOrder(orderId, req.user);
+  }
 
   @Post('order/:orderId/generate')
   @Roles('admin', 'manager', 'cashier')

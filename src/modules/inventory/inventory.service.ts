@@ -75,7 +75,28 @@ export class InventoryService {
     // Chef adds get auto-flagged for manager review. Manager + admin
     // additions are trusted.
     const pendingReview = roleOf(scope) === UserRole.CHEF;
-    return this.ingredientModel.create({ ...dto, branchId, pendingReview });
+    const saved = await this.ingredientModel.create({ ...dto, branchId, pendingReview });
+    // Wake the manager when a chef adds something so they can audit the
+    // cost + threshold before the values slide into reports. Fire-and-
+    // forget — push failure must not block the create response.
+    if (pendingReview) {
+      this.notifications
+        .send(
+          { roles: ['manager', 'admin'], branchId },
+          {
+            type: NotificationType.CHEF_INGREDIENT_PENDING_REVIEW,
+            title: 'Chef added an ingredient',
+            body: `${dto.name} — please review cost and low-stock threshold.`,
+            data: {
+              ingredientId: String((saved as any)._id),
+              ingredientName: dto.name,
+              branchId,
+            },
+          },
+        )
+        .catch(() => {});
+    }
+    return saved;
   }
 
   async adjustStock(id: string, delta: number, reason: string, by: string, scope: AuthUser) {

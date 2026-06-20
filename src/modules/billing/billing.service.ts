@@ -5,6 +5,7 @@ import { Bill, BillDocument, PaymentMethod } from './bill.schema';
 import { OrdersService } from '../orders/orders.service';
 import { OrderStatus } from '../orders/order.schema';
 import { NotificationsService, NotificationType } from '../notifications/notifications.service';
+import { AuthUser, assertOwnsBranch, scopeFilter } from '../../common/scope/branch-scope';
 
 @Injectable()
 export class BillingService {
@@ -96,20 +97,27 @@ export class BillingService {
     return saved;
   }
 
-  async findByOrder(orderId: string) {
-    return this.billModel.findOne({ orderId: new Types.ObjectId(orderId) }).lean();
+  async findByOrder(orderId: string, scope?: AuthUser) {
+    const bill = await this.billModel
+      .findOne({ orderId: new Types.ObjectId(orderId) })
+      .lean();
+    if (bill && scope) assertOwnsBranch(scope, bill as any);
+    return bill;
   }
 
-  async findAll(isPaid?: boolean) {
-    const filter = isPaid !== undefined ? { isPaid } : {};
+  async findAll(isPaid?: boolean, scope?: AuthUser) {
+    const sf = scope ? scopeFilter(scope) : {};
+    const filter: any = { ...sf };
+    if (isPaid !== undefined) filter.isPaid = isPaid;
     return this.billModel.find(filter).sort({ createdAt: -1 }).lean();
   }
 
-  async getDailyRevenue() {
+  async getDailyRevenue(scope?: AuthUser) {
     const start = new Date();
     start.setHours(0, 0, 0, 0);
+    const sf = scope ? scopeFilter(scope) : {};
     const result = await this.billModel.aggregate([
-      { $match: { isPaid: true, paidAt: { $gte: start } } },
+      { $match: { ...sf, isPaid: true, paidAt: { $gte: start } } },
       { $group: { _id: null, total: { $sum: '$total' }, count: { $sum: 1 } } },
     ]);
     return result[0] ?? { total: 0, count: 0 };

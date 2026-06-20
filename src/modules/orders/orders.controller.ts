@@ -34,12 +34,14 @@ export class OrdersController {
     return this.ordersService.getActiveOrders(req.user);
   }
 
-  // GET /orders/:id — staff only
+  // GET /orders/:id — staff only. Passes req.user so the service can
+  // assert branch ownership; without this a manager/waiter could view
+  // any order across branches by direct ID.
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin', 'manager', 'waiter', 'chef', 'cashier')
-  getById(@Param('id') id: string) {
-    return this.ordersService.getById(id);
+  getById(@Param('id') id: string, @Request() req: any) {
+    return this.ordersService.getById(id, req.user);
   }
 
   // POST /orders — staff-initiated order. Requires JWT; branchId comes from
@@ -84,7 +86,7 @@ export class OrdersController {
     @Request() req: any,
     @Headers('idempotency-key') idempotencyKey: string,
   ) {
-    return this.ordersService.updateStatus(id, dto, req.user._id, idempotencyKey);
+    return this.ordersService.updateStatus(id, dto, req.user, req.user._id, idempotencyKey);
   }
 
   // PATCH /orders/:id/items/:itemId/progress  (Chef only)
@@ -97,7 +99,7 @@ export class OrdersController {
     @Body('progress') progress: number,
     @Request() req: any,
   ) {
-    return this.ordersService.updateItemProgress(orderId, itemId, progress, req.user._id);
+    return this.ordersService.updateItemProgress(orderId, itemId, progress, req.user._id, req.user);
   }
 
   // PATCH /orders/:id/items — wholesale item-list replacement, used by the
