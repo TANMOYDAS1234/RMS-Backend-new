@@ -108,6 +108,19 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (!data.tableId && !data.branchId) this.server.emit('kitchen:progress', data);
   }
 
+  /// Inventory mutation broadcast — fans out to every device sitting on
+  /// the affected branch so the manager's stock list refreshes the moment
+  /// a chef adjusts/adds/approves an ingredient. Single-room emit (no
+  /// global fallback) — without branchId we silently drop.
+  emitInventoryUpdate(data: {
+    type: 'CREATE' | 'UPDATE' | 'STOCK' | 'APPROVE' | 'DELETE';
+    ingredientId: string;
+    branchId: string;
+  }) {
+    if (!data.branchId) return;
+    this.server.to(`branch:${data.branchId}`).emit('inventory:updated', data);
+  }
+
   // ── ACK system ──────────────────────────────────────────────────────────────
 
   @SubscribeMessage('ack')

@@ -14,6 +14,7 @@ import {
   scopeFilter,
 } from '../../common/scope/branch-scope';
 import { NotificationsService, NotificationType } from '../notifications/notifications.service';
+import { OrdersGateway } from '../../gateways/orders.gateway';
 
 @Injectable()
 export class InventoryService {
@@ -22,7 +23,18 @@ export class InventoryService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Branch.name) private branchModel: Model<BranchDocument>,
     private notifications: NotificationsService,
+    private gateway: OrdersGateway,
   ) {}
+
+  /** Fire the inventory:updated WebSocket event so every device on this
+   * branch refreshes its inventory list without a manual reload. */
+  private _emitUpdate(
+    type: 'CREATE' | 'UPDATE' | 'STOCK' | 'APPROVE' | 'DELETE',
+    ingredientId: string,
+    branchId: string,
+  ) {
+    this.gateway.emitInventoryUpdate({ type, ingredientId, branchId });
+  }
 
   /** True when this user is allowed to add or edit ingredient
    * *definitions* (name, unit, thresholds, cost) — not just adjust stock.
@@ -96,6 +108,7 @@ export class InventoryService {
         )
         .catch(() => {});
     }
+    this._emitUpdate('CREATE', String((saved as any)._id), branchId);
     return saved;
   }
 
@@ -119,6 +132,7 @@ export class InventoryService {
       ).catch(() => {});
     }
 
+    this._emitUpdate('STOCK', String((item as any)._id), item.branchId);
     return item;
   }
 
@@ -138,6 +152,7 @@ export class InventoryService {
       (safe as any).pendingReview = false;
     }
     const item = await this.ingredientModel.findByIdAndUpdate(id, safe, { new: true }).lean();
+    this._emitUpdate('UPDATE', id, (existing as any).branchId);
     return item!;
   }
 
@@ -147,6 +162,7 @@ export class InventoryService {
     assertOwnsBranch(scope, existing as any);
     await this._assertCanModifyDefs(scope, (existing as any).branchId);
     await this.ingredientModel.findByIdAndDelete(id);
+    this._emitUpdate('DELETE', id, (existing as any).branchId);
     return { deleted: true };
   }
 
@@ -162,6 +178,7 @@ export class InventoryService {
     const item = await this.ingredientModel
       .findByIdAndUpdate(id, { pendingReview: false }, { new: true })
       .lean();
+    this._emitUpdate('APPROVE', id, (existing as any).branchId);
     return item!;
   }
 

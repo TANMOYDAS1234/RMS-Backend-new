@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Ingredient, IngredientSchema } from './ingredient.schema';
 import { User, UserSchema } from '../users/user.schema';
@@ -6,6 +6,7 @@ import { Branch, BranchSchema } from '../branches/branch.schema';
 import { InventoryService } from './inventory.service';
 import { InventoryController } from './inventory.controller';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { OrdersModule } from '../orders/orders.module';
 
 @Module({
   imports: [
@@ -15,6 +16,10 @@ import { NotificationsModule } from '../notifications/notifications.module';
       { name: Branch.name, schema: BranchSchema },
     ]),
     NotificationsModule,
+    // OrdersGateway lives in OrdersModule; forwardRef avoids the
+    // circular import (OrdersService already depends on a few
+    // inventory-adjacent things via its own forwardRef chains).
+    forwardRef(() => OrdersModule),
   ],
   controllers: [InventoryController],
   providers: [InventoryService],
