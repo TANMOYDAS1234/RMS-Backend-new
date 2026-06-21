@@ -33,6 +33,16 @@ export class InventoryController {
   @Roles('admin', 'manager', 'chef')
   lowStock(@Request() req: any) { return this.inventoryService.findLowStock(req.user); }
 
+  // Admin can manually re-fire low-stock notifications for everything
+  // currently below threshold. Useful when items were seeded already
+  // low (no OK→low transition ever happened) or when a push channel
+  // was added after the alerts would normally have fired.
+  @Post('low-stock/scan')
+  @Roles('admin', 'manager')
+  scanLowStock(@Request() req: any) {
+    return this.inventoryService.scanLowStock(req.user);
+  }
+
   @Get(':id')
   @Roles('admin', 'manager', 'chef')
   findOne(@Param('id') id: string, @Request() req: any) {

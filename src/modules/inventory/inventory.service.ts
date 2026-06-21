@@ -73,6 +73,28 @@ export class InventoryService {
       .lean();
   }
 
+  /// Re-fire low-stock notifications for every ingredient in scope that's
+  /// currently at or below threshold. The normal flow only sends when the
+  /// item *transitions* from OK to low — if an item was seeded already
+  /// below the line, or the user lowers the threshold past current stock,
+  /// the manager never gets pinged. This lets the admin "kick" alerts on
+  /// demand. Returns how many notifications fanned out.
+  async scanLowStock(scope: AuthUser) {
+    const items = await this.findLowStock(scope);
+    let fired = 0;
+    for (const item of items as any[]) {
+      await this.sendLowStockNotification(
+        item.name,
+        item.currentStock,
+        item.lowStockThreshold,
+        item.unit,
+        item.branchId?.toString?.() ?? String(item.branchId),
+      );
+      fired++;
+    }
+    return { scanned: items.length, fired };
+  }
+
   async findById(id: string, scope: AuthUser) {
     const item = await this.ingredientModel.findById(id).lean();
     if (!item) throw new NotFoundException('Ingredient not found');
