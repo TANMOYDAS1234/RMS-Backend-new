@@ -78,6 +78,17 @@ export class SessionsController {
     return this.sessionsService.getCapacity(tableId);
   }
 
+  // GET /sessions/branch/:branchId/seats
+  // Batched capacity for every table in a branch. One DB query per
+  // table model + a single sessions scan, so the waiter floor grid
+  // can render multi-party occupancy without firing 30 capacity
+  // requests on every refresh. Public (no JWT) — same threat model
+  // as the table-capacity endpoint above.
+  @Get('branch/:branchId/seats')
+  branchSeats(@Param('branchId') branchId: string) {
+    return this.sessionsService.getBranchSeats(branchId);
+  }
+
   // GET /sessions/:id/bill  — public, read-only aggregate of all orders
   // attached to this session. Customer uses this to see their running tab
   // before staff prints the final bill. Uses /sessions/:id/bill rather

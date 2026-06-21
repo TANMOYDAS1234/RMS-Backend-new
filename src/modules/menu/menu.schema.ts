@@ -47,6 +47,11 @@ export class MenuItem {
   @Prop({ type: String, default: null }) imageMime: string | null;
   @Prop({ type: String, default: null }) glbUrl: string | null;
   @Prop({ type: String, default: null }) glbData: string | null;
+  // iOS AR Quick Look needs USDZ — model-viewer's ios-src attribute
+  // picks the right file per platform automatically. Stored the same
+  // way as glbData (base64 in Mongo, served at /menu/:id/usdz).
+  @Prop({ type: String, default: null }) usdzUrl: string | null;
+  @Prop({ type: String, default: null }) usdzData: string | null;
 
   // ── Rich data ───────────────────────────────────────────────────────────────
   @Prop({ type: [String], default: [] }) tags: string[];   // ['spicy','vegan','bestseller']

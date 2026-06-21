@@ -79,6 +79,23 @@ export class MenuService {
       .lean();
   }
 
+  /// iOS-specific 3D upload. The model-viewer page reads `ios-src` to
+  /// hand off to Apple's AR Quick Look; this populates that.
+  async uploadUsdz(id: string, file: Express.Multer.File, scope: AuthUser) {
+    const existing = await this.menuModel.findById(id).lean();
+    if (!existing) throw new NotFoundException('Menu item not found');
+    assertOwnsBranch(scope, existing as any);
+    const base64 = file.buffer.toString('base64');
+    return this.menuModel
+      .findByIdAndUpdate(
+        id,
+        { usdzData: base64, usdzUrl: `/menu/${id}/usdz` },
+        { new: true },
+      )
+      .select('-imageData -glbData -usdzData')
+      .lean();
+  }
+
   async rate(id: string, score: number) {
     const item = await this.menuModel.findById(id);
     if (!item) throw new NotFoundException('Menu item not found');

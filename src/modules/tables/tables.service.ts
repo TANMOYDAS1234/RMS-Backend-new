@@ -17,6 +17,13 @@ export class TablesService {
     return this.tableModel.find(scope ? scopeFilter(scope) : {}).lean();
   }
 
+  /// Branch-specific list — used by the batched `/sessions/branch/:id/seats`
+  /// endpoint so the floor grid can render multi-party capacity for every
+  /// table in one round trip.
+  async findAllForBranch(branchId: string) {
+    return this.tableModel.find({ branchId }).lean();
+  }
+
   /**
    * Looked up by id only (no scope check) because internal callers
    * (sessions, orders) need to resolve a table to derive its branchId

@@ -127,6 +127,40 @@ export class MenuController {
     return res.send(buf);
   }
 
+  // ── USDZ (iOS Quick Look) upload ─────────────────────────────────────────
+  // Apple's AR Quick Look only accepts USDZ. Without this iOS visitors get
+  // an in-page 3D preview but can't tap "View in your space". Admins
+  // upload a USDZ alongside the GLB (model-viewer's ios-src attribute
+  // picks the right file per platform automatically).
+  @Post(':id/usdz')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin', 'manager')
+  @UseInterceptors(FileInterceptor('usdz', {
+    storage: mediaStorage(),
+    limits: { fileSize: 50 * 1024 * 1024 },
+    fileFilter: (_, file, cb) => {
+      const ok = file.originalname.toLowerCase().endsWith('.usdz') ||
+                 file.mimetype === 'model/vnd.usdz+zip' ||
+                 file.mimetype === 'application/octet-stream';
+      if (!ok) return cb(new BadRequestException('USDZ files only'), false);
+      cb(null, true);
+    },
+  }))
+  uploadUsdz(@Param('id') id: string, @UploadedFile() file: Express.Multer.File, @Request() req: any) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    return this.menuService.uploadUsdz(id, file, req.user);
+  }
+
+  @Get(':id/usdz')
+  async serveUsdz(@Param('id') id: string, @Res() res: Response) {
+    const item = await this.menuService.findById(id);
+    if (!(item as any)?.usdzData) return res.status(404).send('Not found');
+    const buf = Buffer.from((item as any).usdzData, 'base64');
+    res.set('Content-Type', 'model/vnd.usdz+zip');
+    res.set('Cache-Control', 'public, max-age=86400');
+    return res.send(buf);
+  }
+
   // ── Customer rating ───────────────────────────────────────────────────────
   @Post(':id/rate')
   rate(@Param('id') id: string, @Body() dto: RateDto) {

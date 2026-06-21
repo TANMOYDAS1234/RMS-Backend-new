@@ -173,6 +173,43 @@ export class SessionsService {
     };
   }
 
+  /// Batched capacity for an entire branch's tables. Used by the
+  /// waiter floor grid so 30 tables don't fire 30 capacity requests
+  /// on every refresh. Returns one row per table; tables with no
+  /// active sessions report 0 occupied.
+  async getBranchSeats(branchId: string) {
+    const tables = await this.tablesService.findAllForBranch(branchId);
+    const sessions = await this.sessionModel
+      .find({ branchId, status: SessionStatus.ACTIVE })
+      .lean();
+    const byTable: Record<string, any[]> = {};
+    for (const s of sessions) {
+      (byTable[s.tableId] = byTable[s.tableId] ?? []).push(s);
+    }
+    return tables.map((t: any) => {
+      const tid = String(t._id);
+      const active = byTable[tid] ?? [];
+      const capacity = t.capacity ?? 1;
+      const occupied = active.reduce(
+        (sum: number, x: any) => sum + (x.partySize ?? 1),
+        0,
+      );
+      return {
+        tableId: tid,
+        tableLabel: t.label,
+        capacity,
+        occupied,
+        remaining: Math.max(0, capacity - occupied),
+        activeParties: active.map((s: any) => ({
+          sessionId: (s._id as any).toString(),
+          partyLabel: s.partyLabel || '',
+          partySize: s.partySize ?? 1,
+          billPending: s.billPending ?? false,
+        })),
+      };
+    });
+  }
+
   async addOrder(sessionId: string, orderId: string) {
     const session = await this.sessionModel.findById(sessionId);
     if (!session) throw new NotFoundException('Session not found');
