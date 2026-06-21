@@ -7,7 +7,7 @@ import { Controller, Get, Query, Request, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { AuditService } from './audit.service';
+import { AuditService, AuditQueryResult } from './audit.service';
 
 @Controller('audit')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -15,6 +15,10 @@ import { AuditService } from './audit.service';
 export class AuditController {
   constructor(private readonly auditService: AuditService) {}
 
+  // Explicit Promise<AuditQueryResult> return type — without it
+  // TypeScript's declaration emitter walks the lean() inference and
+  // bails with TS7056 ("inferred type exceeds maximum length"). Same
+  // reason the service method also annotates its return type.
   @Get()
   list(
     @Request() req: any,
@@ -25,7 +29,7 @@ export class AuditController {
     @Query('branchId') branchId?: string,
     @Query('skip') skip?: string,
     @Query('limit') limit?: string,
-  ) {
+  ): Promise<AuditQueryResult> {
     return this.auditService.query(req.user, {
       type,
       actorId,

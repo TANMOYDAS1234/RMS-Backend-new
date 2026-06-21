@@ -33,6 +33,18 @@ export type AuditQuery = {
   limit?: number;
 };
 
+// Explicit return-type alias for AuditService.query. Mongoose's lean()
+// generates a deeply-nested inferred type that exceeds the TS compiler's
+// serialization budget when declaration emission walks the controller
+// chain, which fails the build with TS7056. Naming the shape here breaks
+// the inference depth and keeps the API contract honest.
+export type AuditQueryResult = {
+  items: Array<Record<string, any>>;
+  total: number;
+  skip: number;
+  limit: number;
+};
+
 @Injectable()
 export class AuditService {
   private readonly logger = new Logger(AuditService.name);
@@ -69,7 +81,7 @@ export class AuditService {
    * only ever sees their own branch's events; admin sees everything (and
    * may further narrow by branchId via the query param).
    */
-  async query(scope: AuthUser, q: AuditQuery) {
+  async query(scope: AuthUser, q: AuditQuery): Promise<AuditQueryResult> {
     const safeLimit = Math.min(Math.max(q.limit ?? 100, 1), 500);
     const safeSkip = Math.max(q.skip ?? 0, 0);
 
