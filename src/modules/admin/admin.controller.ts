@@ -86,4 +86,15 @@ export class AdminController {
   systemHealth() {
     return this.adminService.getSystemHealth();
   }
+
+  // ── Wipe demo seed data ───────────────────────────────────────────────────
+  // One-shot cleanup for the canned data the `seed.ts` script pushed for
+  // first-launch demos. Removes the orders + bills it created (matched
+  // by their `seed-*` idempotency keys) so the live dashboard reflects
+  // only real transactions. Leaves users, menu items, tables, and
+  // ingredients intact — those are useful even outside the demo.
+  @Post('wipe-demo-data')
+  wipeDemoData(@Request() req: any) {
+    return this.adminService.wipeDemoData(req.user._id);
+  }
 }

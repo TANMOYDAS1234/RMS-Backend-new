@@ -274,4 +274,24 @@ export class AdminService {
       activeUsers,
     };
   }
+
+  /// Delete the orders + bills the seed script pushed. Identified by the
+  /// `seed-` idempotency-key prefix on either side. Returns counts so the
+  /// admin can confirm what disappeared.
+  async wipeDemoData(actorId: string) {
+    const orderModel = (this.orderModel as any);
+    const billModel = (this.billModel as any);
+    const orderRes = await orderModel.deleteMany({
+      processedKeys: { $elemMatch: { $regex: /^seed-/ } },
+    });
+    const billRes = await billModel.deleteMany({
+      processedKeys: { $elemMatch: { $regex: /^seed-/ } },
+    });
+    return {
+      deletedOrders: orderRes?.deletedCount ?? 0,
+      deletedBills: billRes?.deletedCount ?? 0,
+      actorId,
+      at: new Date().toISOString(),
+    };
+  }
 }
