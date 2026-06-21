@@ -3,7 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { CashDrawerShift, CashDrawerShiftDocument, ShiftStatus } from './cash-drawer.schema';
 import { Bill, BillDocument, PaymentMethod } from '../billing/bill.schema';
-import { AuthUser, assertOwnsBranch, scopeFilter } from '../../common/scope/branch-scope';
+import { AuthUser, assertOwnsBranch, roleOf, scopeFilter } from '../../common/scope/branch-scope';
 
 @Injectable()
 export class CashDrawerService {
@@ -115,6 +115,25 @@ export class CashDrawerService {
     shift.closingNote = dto.note;
     shift.closedAt = new Date();
     return shift.save();
+  }
+
+  /**
+   * Most recent shift (open OR closed) visible to the caller. Cashiers see
+   * their own most recent shift; managers/admins see the most recent shift
+   * for their branch. Used by the cashier UI to render a persistent
+   * "Last Shift Summary" after the shift is closed.
+   */
+  async last(user: AuthUser) {
+    const q: any = { ...scopeFilter(user) };
+    // Cashiers should only ever see their own last shift, regardless of
+    // scopeFilter (which is branch-only for non-admins).
+    if (roleOf(user) === 'cashier') {
+      q.cashierId = (user as any)._id;
+    }
+    return this.shiftModel
+      .findOne(q)
+      .sort({ openedAt: -1 })
+      .lean();
   }
 
   /** Manager/admin audit listing — branch-scoped. */

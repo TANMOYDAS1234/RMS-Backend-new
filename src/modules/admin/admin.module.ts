@@ -6,6 +6,7 @@ import { User, UserSchema } from '../users/user.schema';
 import { Ingredient, IngredientSchema } from '../inventory/ingredient.schema';
 import { AdminService } from './admin.service';
 import { AdminController } from './admin.controller';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { AdminController } from './admin.controller';
       { name: User.name, schema: UserSchema },
       { name: Ingredient.name, schema: IngredientSchema },
     ]),
+    AuditModule,
   ],
   controllers: [AdminController],
   providers: [AdminService],

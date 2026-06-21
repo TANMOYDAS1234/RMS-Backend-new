@@ -64,7 +64,7 @@ export class AdminController {
   // ── Refund ─────────────────────────────────────────────────────────────────
   @Patch('billing/:id/refund')
   refund(@Param('id') id: string, @Request() req: any) {
-    return this.adminService.processRefund(id, req.user._id);
+    return this.adminService.processRefund(id, req.user);
   }
 
   // ── Profit Margin ──────────────────────────────────────────────────────────

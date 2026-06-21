@@ -47,6 +47,14 @@ export class CashDrawerController {
     return this.cashDrawerService.current(req.user);
   }
 
+  // Most recent shift (open OR closed) for the caller / their branch.
+  // Lets the cashier UI keep showing the last shift summary after closing.
+  @Get('last')
+  @Roles('cashier', 'manager', 'admin')
+  last(@Request() req: any) {
+    return this.cashDrawerService.last(req.user);
+  }
+
   // Close my open shift.
   @Post(':id/close')
   @Roles('cashier', 'manager', 'admin')

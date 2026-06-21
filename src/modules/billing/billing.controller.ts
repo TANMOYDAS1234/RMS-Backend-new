@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, Param, Query, Request, Headers, UseGuards } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Post, Body, Param, Query, Request, Res, Headers, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { IsEnum, IsNumber, IsOptional, IsArray, IsString, Min, Max } from 'class-validator';
 import { BillingService } from './billing.service';
@@ -22,6 +23,12 @@ class PaymentDto {
   @IsOptional() @IsString() razorpayPaymentId?: string;
   @IsOptional() @IsString() razorpayOrderId?: string;
   @IsOptional() @IsString() razorpaySignature?: string;
+  @IsOptional() @IsNumber() @Min(0) tipAmount?: number;
+}
+
+class RequestRefundDto {
+  @IsString() reason: string;
+  @IsOptional() @IsString() reference?: string;
 }
 
 @Controller('billing')
@@ -69,6 +76,40 @@ export class BillingController {
     return this.billingService.getDailyRevenue(req.user);
   }
 
+  /**
+   * GST/tax CSV export for accounting. Admin sees every branch, manager
+   * is auto-scoped to their own. `from`/`to` are ISO date strings; we
+   * default to last 30 days if missing so an unprepared frontend can't
+   * 500 the endpoint.
+   */
+  @Get('reports/gst')
+  @Roles('admin', 'manager')
+  async gstReport(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Request() req: any,
+    @Res() res: Response,
+  ) {
+    const now = new Date();
+    const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const fromDate = from ? new Date(from) : defaultFrom;
+    const toDate = to ? new Date(to) : now;
+    if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+      throw new BadRequestException('Invalid from/to date');
+    }
+    const csv = await this.billingService.generateGstCsv(
+      fromDate,
+      toDate,
+      req.user,
+    );
+    const fname = `gst-report-${fromDate.toISOString().slice(0, 10)}-to-${toDate
+      .toISOString()
+      .slice(0, 10)}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
+    res.send(csv);
+  }
+
   @Get('order/:orderId')
   @Roles('admin', 'manager', 'cashier', 'waiter')
   findByOrder(@Param('orderId') orderId: string, @Request() req: any) {
@@ -79,6 +120,34 @@ export class BillingController {
   @Roles('admin', 'manager', 'cashier')
   generate(@Param('orderId') orderId: string, @Body() dto: GenerateBillDto) {
     return this.billingService.generateBill(orderId, dto.discountPercent ?? 0);
+  }
+
+  // ── Refund workflow ───────────────────────────────────────────────────────
+  //
+  // Cashier files the request with a reason; manager (or admin) approves
+  // (executes the PSP refund) or denies. The legacy PATCH /admin/billing/:id
+  // /refund endpoint still works for admin-only quick refunds.
+
+  @Post(':id/request-refund')
+  @Roles('admin', 'manager', 'cashier')
+  requestRefund(
+    @Param('id') id: string,
+    @Body() dto: RequestRefundDto,
+    @Request() req: any,
+  ) {
+    return this.billingService.requestRefund(id, req.user, dto.reason, dto.reference);
+  }
+
+  @Post(':id/approve-refund')
+  @Roles('admin', 'manager')
+  approveRefund(@Param('id') id: string, @Request() req: any) {
+    return this.billingService.approveRefund(id, req.user);
+  }
+
+  @Post(':id/deny-refund')
+  @Roles('admin', 'manager')
+  denyRefund(@Param('id') id: string, @Request() req: any) {
+    return this.billingService.denyRefund(id, req.user);
   }
 
   @Post(':id/pay')
@@ -99,6 +168,7 @@ export class BillingController {
         razorpayPaymentId: dto.razorpayPaymentId,
         razorpayOrderId: dto.razorpayOrderId,
       },
+      dto.tipAmount,
     );
   }
 }

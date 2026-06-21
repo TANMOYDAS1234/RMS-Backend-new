@@ -6,20 +6,35 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as bcrypt from 'bcryptjs';
 import { User, UserDocument } from '../users/user.schema';
+import { AuditService } from '../audit/audit.service';
+import { AuditEventType } from '../audit/audit-log.schema';
 
 @Injectable()
 export class AuthService {
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private jwtService: JwtService,
+    private audit: AuditService,
   ) {}
 
   async login(email: string, password: string) {
+    const normalizedEmail = email.toLowerCase();
     const user = await this.userModel
-      .findOne({ email: email.toLowerCase(), isActive: true })
+      .findOne({ email: normalizedEmail, isActive: true })
       .select('+password');
 
     if (!user || !(await bcrypt.compare(password, user.password))) {
+      // Record the attempt so a brute-force pattern is visible in the
+      // audit feed. actorId stays null when we never resolved a user
+      // (wrong email) or when the password didn't match.
+      await this.audit.record({
+        type: AuditEventType.AUTH_FAILED,
+        actorId: user ? user._id.toString() : null,
+        actorEmail: normalizedEmail,
+        actorRole: user ? user.role : null,
+        branchId: user?.branchId ?? null,
+        meta: { reason: user ? 'bad_password' : 'unknown_email' },
+      });
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -31,6 +46,13 @@ export class AuthService {
       role: user.role,
       branchId: user.branchId ?? null,
     };
+    await this.audit.record({
+      type: AuditEventType.AUTH_LOGIN,
+      actorId: user._id.toString(),
+      actorEmail: user.email,
+      actorRole: user.role,
+      branchId: user.branchId ?? null,
+    });
     return {
       accessToken: this.jwtService.sign(payload),
       user: {
@@ -68,5 +90,19 @@ export class AuthService {
 
   async validateToken(payload: any) {
     return this.userModel.findById(payload.sub).lean();
+  }
+
+  /** Record a logout event. JWTs are stateless so there's nothing to
+   * revoke server-side — this is purely for the audit trail. */
+  async logout(userId: string) {
+    const user = await this.userModel.findById(userId).lean();
+    await this.audit.record({
+      type: AuditEventType.AUTH_LOGOUT,
+      actorId: userId,
+      actorEmail: user?.email ?? null,
+      actorRole: user?.role ?? null,
+      branchId: user?.branchId ?? null,
+    });
+    return { ok: true };
   }
 }

@@ -4,10 +4,15 @@ import { Model } from 'mongoose';
 import * as bcrypt from 'bcryptjs';
 import { User, UserDocument, UserRole } from './user.schema';
 import { AuthUser, assertOwnsBranch, isAdmin, scopeFilter } from '../../common/scope/branch-scope';
+import { AuditService } from '../audit/audit.service';
+import { AuditEventType } from '../audit/audit-log.schema';
 
 @Injectable()
 export class UsersService {
-  constructor(@InjectModel(User.name) private userModel: Model<UserDocument>) {}
+  constructor(
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
+    private audit: AuditService,
+  ) {}
 
   async create(dto: { name: string; email: string; password: string; role?: UserRole; branchId?: string }) {
     const exists = await this.userModel.findOne({ email: dto.email.toLowerCase() });
@@ -47,6 +52,26 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
     const user = await this.userModel.findByIdAndUpdate(id, dto, { new: true }).select('-password').lean();
+
+    // RBAC-relevant change — emit a dedicated audit event. We check both
+    // the role field being explicitly in the patch AND that the value
+    // actually moved, so silently re-saving the same role doesn't pollute
+    // the trail with noise.
+    if (dto.role !== undefined && dto.role !== existing.role) {
+      await this.audit.record({
+        type: AuditEventType.RBAC_ROLE_CHANGED,
+        actorId: scope?._id?.toString?.() ?? null,
+        actorEmail: (scope as any)?.email ?? null,
+        actorRole: (scope as any)?.role ?? null,
+        branchId: (existing as any).branchId ?? null,
+        meta: {
+          targetUserId: id,
+          targetEmail: existing.email,
+          previousRole: existing.role,
+          newRole: dto.role,
+        },
+      });
+    }
     return user!;
   }
 

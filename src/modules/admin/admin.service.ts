@@ -10,6 +10,9 @@ import {
   PAYMENT_GATEWAY,
   PaymentGateway,
 } from '../billing/payment-gateway/payment-gateway.interface';
+import { AuditService } from '../audit/audit.service';
+import { AuditEventType } from '../audit/audit-log.schema';
+import { AuthUser } from '../../common/scope/branch-scope';
 
 @Injectable()
 export class AdminService {
@@ -19,6 +22,7 @@ export class AdminService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Ingredient.name) private ingredientModel: Model<IngredientDocument>,
     @Inject(PAYMENT_GATEWAY) private paymentGateway: PaymentGateway,
+    private audit: AuditService,
   ) {}
 
   // ── Audit Log: flatten order auditLog[] entries in date range ─────────────
@@ -121,7 +125,14 @@ export class AdminService {
   }
 
   // ── Refund ─────────────────────────────────────────────────────────────────
-  async processRefund(billId: string, adminId: string) {
+  async processRefund(billId: string, actor: AuthUser | string) {
+    // Back-compat: callers used to pass just the admin's _id string.
+    // Newer callers pass the whole AuthUser so we can capture email/role
+    // in the audit trail.
+    const adminId =
+      typeof actor === 'string' ? actor : actor?._id?.toString?.() ?? '';
+    const actorUser = typeof actor === 'string' ? null : actor;
+
     const bill = await this.billModel.findById(billId);
     if (!bill) throw new NotFoundException('Bill not found');
     if (!bill.isPaid) throw new BadRequestException('Bill is not paid');
@@ -143,7 +154,14 @@ export class AdminService {
     (bill as any).refundedBy = adminId.toString();
     (bill as any).refundId = psp.refundId;
     (bill as any).refundProvider = psp.provider;
-    (bill as any).refundStatus = psp.status;
+    // Two layers: PSP-status (succeeded/pending from the gateway) is kept on
+    // refundProviderStatus, while refundStatus now tracks the request lifecycle
+    // shared with /billing/:id/request-refund. Admin-initiated direct refunds
+    // skip the PENDING step and jump straight to APPROVED.
+    (bill as any).refundProviderStatus = psp.status;
+    (bill as any).refundStatus = 'APPROVED';
+    (bill as any).refundApprovedBy = adminId.toString();
+    (bill as any).refundResolvedAt = new Date();
     await bill.save();
 
     if ((bill as any).orderId) {
@@ -166,6 +184,25 @@ export class AdminService {
         await order.save();
       }
     }
+
+    // Cross-cutting audit: refunds move real money and are the #1 thing
+    // an auditor wants to see filtered by date / branch.
+    await this.audit.record({
+      type: AuditEventType.BILL_REFUNDED,
+      actorId: adminId || null,
+      actorEmail: (actorUser as any)?.email ?? null,
+      actorRole: (actorUser as any)?.role ?? null,
+      branchId: (bill as any).branchId ?? null,
+      meta: {
+        billId: bill._id.toString(),
+        orderId: (bill as any).orderId?.toString?.() ?? null,
+        amount: bill.total,
+        refundId: psp.refundId,
+        provider: psp.provider,
+        status: psp.status,
+      },
+    });
+
     return bill;
   }
 

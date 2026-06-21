@@ -70,4 +70,20 @@ export class AnalyticsController {
     const t = to ? new Date(to) : new Date();
     return this.analyticsService.getStaffPerformance(f, t, req.user);
   }
+
+  // Cross-branch comparison — admins only. Method-level @Roles overrides
+  // the class-level ('admin','manager') so a manager hitting this endpoint
+  // is rejected by RolesGuard before the handler runs. We deliberately do
+  // NOT pass req.user into the service: this query intentionally spans
+  // every branch in the chain.
+  @Get('branch-comparison')
+  @Roles('admin')
+  getBranchComparison(
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    const f = from ? new Date(from) : new Date(Date.now() - 30 * 86400000);
+    const t = to ? new Date(to) : new Date();
+    return this.analyticsService.getBranchComparison(f, t);
+  }
 }

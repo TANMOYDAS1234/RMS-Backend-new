@@ -20,6 +20,7 @@ import { StorageModule } from './common/storage/storage.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { CashDrawerModule } from './modules/cash-drawer/cash-drawer.module';
 import { SystemModule } from './modules/system/system.module';
+import { AuditModule } from './modules/audit/audit.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { IdempotencyInterceptor } from './common/interceptors/idempotency.interceptor';
 import { AppController } from './app.controller';
@@ -56,6 +57,7 @@ import { AppController } from './app.controller';
     NotificationsModule,
     CashDrawerModule,
     SystemModule,
+    AuditModule,
   ],
   controllers: [AppController],
   providers: [

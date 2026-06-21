@@ -7,6 +7,7 @@ import { InventoryService } from './inventory.service';
 import { InventoryController } from './inventory.controller';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { OrdersModule } from '../orders/orders.module';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { OrdersModule } from '../orders/orders.module';
     // circular import (OrdersService already depends on a few
     // inventory-adjacent things via its own forwardRef chains).
     forwardRef(() => OrdersModule),
+    AuditModule,
   ],
   controllers: [InventoryController],
   providers: [InventoryService],

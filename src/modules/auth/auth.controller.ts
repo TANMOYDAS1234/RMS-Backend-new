@@ -1,6 +1,7 @@
 // ─── Auth Controller ─────────────────────────────────────────────────────────
 
 import { Controller, Post, Get, Patch, Body, Request, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
+
 import { IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -30,6 +31,16 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   getMe(@Request() req: any) {
     return this.authService.getMe(req.user._id);
+  }
+
+  // Stateless JWT — logout is purely an audit/notification ping. The
+  // client still drops the token locally; this endpoint just lets the
+  // audit log mark the session boundary.
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  logout(@Request() req: any) {
+    return this.authService.logout(req.user._id.toString());
   }
 
   @Patch('me')

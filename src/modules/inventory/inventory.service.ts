@@ -15,6 +15,8 @@ import {
 } from '../../common/scope/branch-scope';
 import { NotificationsService, NotificationType } from '../notifications/notifications.service';
 import { OrdersGateway } from '../../gateways/orders.gateway';
+import { AuditService } from '../audit/audit.service';
+import { AuditEventType } from '../audit/audit-log.schema';
 
 @Injectable()
 export class InventoryService {
@@ -24,6 +26,7 @@ export class InventoryService {
     @InjectModel(Branch.name) private branchModel: Model<BranchDocument>,
     private notifications: NotificationsService,
     private gateway: OrdersGateway,
+    private audit: AuditService,
   ) {}
 
   /** Fire the inventory:updated WebSocket event so every device on this
@@ -179,6 +182,24 @@ export class InventoryService {
       .findByIdAndUpdate(id, { pendingReview: false }, { new: true })
       .lean();
     this._emitUpdate('APPROVE', id, (existing as any).branchId);
+
+    // Only emit an audit event when state actually flipped — re-approving
+    // a clean record shouldn't litter the audit feed.
+    if ((existing as any).pendingReview) {
+      await this.audit.record({
+        type: AuditEventType.INVENTORY_APPROVED,
+        actorId: scope?._id?.toString?.() ?? null,
+        actorEmail: (scope as any)?.email ?? null,
+        actorRole: roleOf(scope),
+        branchId: (existing as any).branchId ?? null,
+        meta: {
+          ingredientId: id,
+          name: (existing as any).name,
+          unit: (existing as any).unit,
+          currentStock: (existing as any).currentStock,
+        },
+      });
+    }
     return item!;
   }
 

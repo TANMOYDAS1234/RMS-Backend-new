@@ -33,6 +33,9 @@ export enum NotificationType {
   // chefCanManageInventory toggle. Routes to manager+admin so they
   // know to audit the cost + threshold values the chef entered.
   CHEF_INGREDIENT_PENDING_REVIEW = 'CHEF_INGREDIENT_PENDING_REVIEW',
+  // Fires when a cashier (or manager) flags a paid bill for refund. Routes
+  // to manager+admin so they can review and approve/deny in the admin tab.
+  REFUND_REQUESTED = 'REFUND_REQUESTED',
 }
 
 /** Per-type channel ids — match the Flutter AndroidNotificationChannel defs. */
@@ -44,6 +47,8 @@ const CHANNEL_FOR: Record<NotificationType, string> = {
   [NotificationType.LOW_STOCK]: 'low_stock',
   // Reuses low_stock channel — non-urgent but still surfaced.
   [NotificationType.CHEF_INGREDIENT_PENDING_REVIEW]: 'low_stock',
+  // Refunds ride the payments channel — same audience already cares.
+  [NotificationType.REFUND_REQUESTED]: 'payments',
 };
 
 export interface RecipientFilter {

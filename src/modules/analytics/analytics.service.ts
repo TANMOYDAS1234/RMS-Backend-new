@@ -128,4 +128,53 @@ export class AnalyticsService {
       { $sort: { ordersHandled: -1 } },
     ]);
   }
+
+  // Admin-only cross-branch comparison. No scope filter — the controller
+  // gates this to admin role so every branch is folded into the result.
+  // Bills.branchId is a string; Branches._id is an ObjectId, so we
+  // $convert the bill's branchId before the lookup (same trick the
+  // manager service uses for waiterId).
+  async getBranchComparison(from: Date, to: Date) {
+    return this.billModel.aggregate([
+      { $match: { isPaid: true, paidAt: { $gte: from, $lte: to } } },
+      {
+        $group: {
+          _id: '$branchId',
+          revenue: { $sum: '$total' },
+          orderCount: { $sum: 1 },
+          avgOrderValue: { $avg: '$total' },
+          gstCollected: { $sum: '$gstAmount' },
+        },
+      },
+      {
+        $addFields: {
+          branchObjId: {
+            $convert: { input: '$_id', to: 'objectId', onError: null, onNull: null },
+          },
+        },
+      },
+      {
+        $lookup: {
+          from: 'branches',
+          localField: 'branchObjId',
+          foreignField: '_id',
+          as: 'branch',
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          branchId: '$_id',
+          branchName: {
+            $ifNull: [{ $arrayElemAt: ['$branch.name', 0] }, 'Unknown'],
+          },
+          revenue: 1,
+          orderCount: 1,
+          avgOrderValue: 1,
+          gstCollected: 1,
+        },
+      },
+      { $sort: { revenue: -1 } },
+    ]);
+  }
 }
