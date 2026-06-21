@@ -14,6 +14,7 @@ import { TableSession, SessionDocument, SessionStatus } from './session.schema';
 import { TablesService } from '../tables/tables.service';
 import { BranchesService } from '../branches/branches.service';
 import { NotificationsService, NotificationType } from '../notifications/notifications.service';
+import { AuthUser, assertOwnsBranch } from '../../common/scope/branch-scope';
 import { Inject, forwardRef } from '@nestjs/common';
 import * as crypto from 'crypto';
 import * as https from 'https';
@@ -200,6 +201,34 @@ export class SessionsService {
     );
   }
 
+  /**
+   * Customer self-leave. Used when the customer just wants to drop the
+   * QR session without paying — e.g. they walked into the wrong place,
+   * or browsed and changed their mind. Refuses if there's any unpaid
+   * order on this session (in that case they must pay or cancel each
+   * order first). Without this endpoint sessions sat phantom-occupying
+   * the table for the full 30-min TTL.
+   */
+  async leaveSession(sessionId: string): Promise<{ left: true }> {
+    const session = await this.sessionModel.findById(sessionId);
+    if (!session) throw new NotFoundException('Session not found');
+    if (session.status !== SessionStatus.ACTIVE) return { left: true };
+
+    const orderModel = (this.sessionModel.db as any).model('Order');
+    const liveOrder = await orderModel.findOne({
+      _id: { $in: session.orderIds },
+      status: { $nin: ['paid', 'closed', 'cancelled'] },
+    }).lean();
+    if (liveOrder) {
+      throw new ConflictException(
+        'You have an unpaid order. Please pay or cancel it before leaving the session.',
+      );
+    }
+    session.status = SessionStatus.CLOSED;
+    await session.save();
+    return { left: true };
+  }
+
   /** Backward-compat singular getter: returns ANY active session at the
    * table (the first one found). Callers that need every party should
    * use `getActiveSessionsForTable` or `getCapacity` instead. */
@@ -296,9 +325,17 @@ export class SessionsService {
   }
 
   /** Waiter dismisses a help request after attending the table. */
-  async resolveHelpRequest(sessionId: string, helpId: string, waiterId: string) {
+  async resolveHelpRequest(
+    sessionId: string,
+    helpId: string,
+    waiterId: string,
+    scope?: AuthUser,
+  ) {
     const session = await this.sessionModel.findById(sessionId);
     if (!session) throw new NotFoundException('Session not found');
+    // Branch scope: a waiter in branch A cannot resolve help requests on
+    // a session in branch B. Admin passes through.
+    if (scope) assertOwnsBranch(scope, session as any);
     const entry = session.helpRequests.find((h) => h.id === helpId);
     if (!entry) throw new NotFoundException('Help request not found');
     if (entry.resolvedAt) return { resolved: true, alreadyResolved: true };

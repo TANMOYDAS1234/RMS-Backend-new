@@ -58,6 +58,17 @@ export class SessionsController {
     return this.sessionsService.getActiveSession(tableId);
   }
 
+  // POST /sessions/:id/leave — customer self-drops the session. No JWT;
+  // possessing the session id implies the QR scan. Refuses when there's
+  // an unpaid order so customers can't dine-and-dash by hitting the
+  // Leave button. Throttled.
+  @Post(':id/leave')
+  @Throttle({ medium: { limit: 6, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  leave(@Param('id') id: string) {
+    return this.sessionsService.leaveSession(id);
+  }
+
   // GET /sessions/table/:tableId/capacity
   // How many seats are free + what parties are currently seated. Public:
   // the customer app uses it when showing "Joining a busy table" before
@@ -141,6 +152,11 @@ export class SessionsController {
     @Param('helpId') helpId: string,
     @Request() req: any,
   ) {
-    return this.sessionsService.resolveHelpRequest(id, helpId, req.user._id);
+    return this.sessionsService.resolveHelpRequest(
+      id,
+      helpId,
+      req.user._id,
+      req.user,
+    );
   }
 }

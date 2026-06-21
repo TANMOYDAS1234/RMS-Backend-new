@@ -7,6 +7,8 @@ import { OrderStatus } from '../orders/order.schema';
 import { NotificationsService, NotificationType } from '../notifications/notifications.service';
 import { AuthUser, assertOwnsBranch, scopeFilter, roleOf } from '../../common/scope/branch-scope';
 import { PAYMENT_GATEWAY, PaymentGateway } from './payment-gateway/payment-gateway.interface';
+import { AuditService } from '../audit/audit.service';
+import { AuditEventType } from '../audit/audit-log.schema';
 
 @Injectable()
 export class BillingService {
@@ -15,6 +17,7 @@ export class BillingService {
     private ordersService: OrdersService,
     private notifications: NotificationsService,
     @Inject(PAYMENT_GATEWAY) private paymentGateway: PaymentGateway,
+    private audit: AuditService,
   ) {}
 
   async generateBill(orderId: string, discountPercent = 0) {
@@ -72,6 +75,11 @@ export class BillingService {
     if (idempotencyKey) bill.processedKeys.push(idempotencyKey);
     if (razorpay?.razorpayPaymentId) {
       (bill as any).razorpayPaymentId = razorpay.razorpayPaymentId;
+      // Refund handlers look up paymentChargeId to call Razorpay's refund
+      // API. For Razorpay sandbox/live, the payment_id IS the chargeId on
+      // the PSP side. Stamp it here so approveRefund/denyRefund don't
+      // silently no-op on card/UPI bills.
+      (bill as any).paymentChargeId = razorpay.razorpayPaymentId;
     }
     if (razorpay?.razorpayOrderId) {
       (bill as any).razorpayOrderId = razorpay.razorpayOrderId;
@@ -223,7 +231,26 @@ export class BillingService {
     (bill as any).refundApprovedBy = user._id?.toString?.() ?? String(user._id);
     (bill as any).refundResolvedAt = new Date();
 
-    return bill.save();
+    const saved = await bill.save();
+    // Compliance trail — without this entry, two-step refunds were
+    // invisible in the audit log even though admin-initiated ones were
+    // recorded. Manager refunds carry the highest authorization weight,
+    // so they MUST land in the audit.
+    this.audit.record({
+      type: AuditEventType.BILL_REFUNDED,
+      actorId: user._id?.toString?.() ?? String(user._id),
+      actorRole: roleOf(user),
+      branchId: (bill as any).branchId,
+      meta: {
+        billId: bill._id.toString(),
+        amount: bill.total,
+        chargeId,
+        refundId: psp.refundId,
+        outcome: 'APPROVED',
+        reason: (bill as any).refundReason,
+      },
+    }).catch(() => {});
+    return saved;
   }
 
   /**
@@ -242,7 +269,20 @@ export class BillingService {
     (bill as any).refundDeniedBy = user._id?.toString?.() ?? String(user._id);
     (bill as any).refundResolvedAt = new Date();
 
-    return bill.save();
+    const saved = await bill.save();
+    this.audit.record({
+      type: AuditEventType.BILL_REFUNDED,
+      actorId: user._id?.toString?.() ?? String(user._id),
+      actorRole: roleOf(user),
+      branchId: (bill as any).branchId,
+      meta: {
+        billId: bill._id.toString(),
+        amount: bill.total,
+        outcome: 'DENIED',
+        reason: (bill as any).refundReason,
+      },
+    }).catch(() => {});
+    return saved;
   }
 
   async getDailyRevenue(scope?: AuthUser) {

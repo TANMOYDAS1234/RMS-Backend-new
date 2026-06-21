@@ -76,6 +76,27 @@ export class OrdersController {
     return this.ordersService.createFromSession(dto, idempotencyKey);
   }
 
+  // POST /orders/:id/cancel — customer self-cancel via QR. No JWT; the
+  // session-id supplied in the body proves ownership. Only allowed while
+  // status is CREATED or CONFIRMED (kitchen hasn't started). Throttled
+  // because it's public.
+  @Post(':id/cancel')
+  @Throttle({ medium: { limit: 20, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  cancelByCustomer(
+    @Param('id') id: string,
+    @Body() body: { sessionId: string },
+    @Headers('idempotency-key') idempotencyKey: string,
+  ) {
+    if (!body?.sessionId) {
+      throw new BadRequestException('sessionId is required to cancel.');
+    }
+    if (!idempotencyKey) {
+      throw new BadRequestException('Idempotency-Key header is required.');
+    }
+    return this.ordersService.cancelByCustomer(id, body.sessionId, idempotencyKey);
+  }
+
   // PATCH /orders/:id/status — staff state-machine transitions
   @Patch(':id/status')
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -98,8 +119,16 @@ export class OrdersController {
     @Param('itemId') itemId: string,
     @Body('progress') progress: number,
     @Request() req: any,
+    @Headers('idempotency-key') idempotencyKey: string,
   ) {
-    return this.ordersService.updateItemProgress(orderId, itemId, progress, req.user._id, req.user);
+    return this.ordersService.updateItemProgress(
+      orderId,
+      itemId,
+      progress,
+      req.user._id,
+      req.user,
+      idempotencyKey,
+    );
   }
 
   // PATCH /orders/:id/items — wholesale item-list replacement, used by the

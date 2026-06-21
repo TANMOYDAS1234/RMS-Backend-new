@@ -22,18 +22,33 @@ import { NotificationsService, NotificationType } from '../notifications/notific
 import {
   AuthUser,
   assertOwnsBranch,
+  roleOf,
   scopeFilter,
 } from '../../common/scope/branch-scope';
 
 // Valid state machine transitions
 const TRANSITIONS: Partial<Record<OrderStatus, OrderStatus[]>> = {
-  [OrderStatus.CREATED]: [OrderStatus.CONFIRMED],
-  [OrderStatus.CONFIRMED]: [OrderStatus.PREPARING],
+  // CREATED and CONFIRMED can also CANCEL (customer/manager flow). After
+  // the kitchen starts work (PREPARING) cancellation requires a staff
+  // refund instead, so we don't allow the customer-cancel jump.
+  [OrderStatus.CREATED]: [OrderStatus.CONFIRMED, OrderStatus.CANCELLED],
+  [OrderStatus.CONFIRMED]: [OrderStatus.PREPARING, OrderStatus.CANCELLED],
   [OrderStatus.PREPARING]: [OrderStatus.READY],
   [OrderStatus.READY]: [OrderStatus.SERVED],
   [OrderStatus.SERVED]: [OrderStatus.BILLED],
   [OrderStatus.BILLED]: [OrderStatus.PAID],
   [OrderStatus.PAID]: [OrderStatus.CLOSED],
+};
+
+// Role → which transitions a user of that role is allowed to PERFORM.
+// Without this gate, a cashier could mark an order PREPARING and a chef
+// could mark it PAID — only branch scope was checked. admin + manager
+// are deliberately omitted so they can perform any transition (they're
+// the override authority).
+const ROLE_TRANSITIONS: Record<string, OrderStatus[]> = {
+  waiter: [OrderStatus.CONFIRMED, OrderStatus.SERVED, OrderStatus.BILLED],
+  chef: [OrderStatus.PREPARING, OrderStatus.READY],
+  cashier: [OrderStatus.BILLED, OrderStatus.PAID, OrderStatus.CLOSED],
 };
 
 const DEFAULT_GST_RATE = 0.18; // fallback if a branch hasn't configured one
@@ -190,6 +205,40 @@ export class OrdersService {
       .lean();
   }
 
+  /**
+   * Customer self-cancel. Authenticated by sessionId — only orders linked
+   * to the same session can be cancelled, and only while the kitchen
+   * hasn't started cooking (status in CREATED|CONFIRMED). Public route
+   * (no JWT) because customers don't sign in.
+   */
+  async cancelByCustomer(orderId: string, sessionId: string, idempotencyKey: string): Promise<Order> {
+    const order = await this.orderModel.findById(orderId);
+    if (!order) throw new NotFoundException(`Order ${orderId} not found`);
+    // Verify the order belongs to this session — without this check any
+    // anonymous caller could cancel any order by ID.
+    const session: any = await (this.sessionsService as any).sessionModel.findById(sessionId);
+    if (!session) throw new NotFoundException('Session not found');
+    const ownsOrder = (session.orderIds ?? []).some(
+      (oid: any) => oid?.toString?.() === orderId,
+    );
+    if (!ownsOrder) {
+      throw new ForbiddenException('This order does not belong to your session.');
+    }
+    if (order.status !== OrderStatus.CREATED && order.status !== OrderStatus.CONFIRMED) {
+      throw new BadRequestException(
+        'Cannot cancel — the kitchen has already started preparing your order. Please ask a server.',
+      );
+    }
+    // Idempotency: same key + same order = no-op.
+    if (order.processedKeys.includes(idempotencyKey)) return order.toObject();
+    order.status = OrderStatus.CANCELLED;
+    order.processedKeys.push(idempotencyKey);
+    order.auditLog.push({ action: 'STATUS_CANCELLED_BY_CUSTOMER', by: 'customer', at: new Date() });
+    const saved = await order.save();
+    this.gateway.emitOrderUpdated(saved);
+    return saved;
+  }
+
   async getById(id: string, scope?: AuthUser): Promise<Order> {
     const order = await this.orderModel.findById(id).lean();
     if (!order) throw new NotFoundException(`Order ${id} not found`);
@@ -244,6 +293,22 @@ export class OrdersService {
         throw new BadRequestException(
           `Cannot transition from ${order.status} to ${dto.status}`,
         );
+      }
+
+      // Role gate: a cashier should never mark an order PREPARING; a
+      // chef should never mark it PAID. Admin + manager bypass — they're
+      // the override authority for any state. Without this check the
+      // backend trusted the role-guarded controller route entirely, but
+      // the same /orders/:id/status endpoint is open to every operator
+      // role for legitimate transitions of their own.
+      const role = roleOf(scope);
+      if (role !== 'admin' && role !== 'manager') {
+        const roleAllowed = ROLE_TRANSITIONS[role] ?? [];
+        if (!roleAllowed.includes(dto.status)) {
+          throw new ForbiddenException(
+            `Your role (${role}) is not allowed to advance an order to ${dto.status}.`,
+          );
+        }
       }
 
       order.status = dto.status;
@@ -371,6 +436,7 @@ export class OrdersService {
     progress: number,
     userId: string,
     scope?: AuthUser,
+    idempotencyKey?: string,
   ): Promise<void> {
     // Branch ownership + load the order so we can route the WS event
     // to the right rooms (chef cohort of the order's branch, plus the
@@ -378,9 +444,22 @@ export class OrdersService {
     const order = await this.orderModel.findById(orderId).lean();
     if (!order) throw new NotFoundException(`Order ${orderId} not found`);
     if (scope) assertOwnsBranch(scope, order as any);
+    // True idempotency: if the chef's slider sends the same key twice
+    // (network retry, double-click), the second write is a no-op
+    // instead of risking out-of-order last-write-wins overwrites of a
+    // newer value. The controller demands a key on every PATCH so we
+    // can assume it's present.
+    if (idempotencyKey && (order as any).processedKeys?.includes(idempotencyKey)) {
+      return;
+    }
     await this.orderModel.updateOne(
       { _id: orderId, 'items.itemId': itemId },
-      { $set: { 'items.$.progress': progress } },
+      {
+        $set: { 'items.$.progress': progress },
+        ...(idempotencyKey
+          ? { $addToSet: { processedKeys: idempotencyKey } }
+          : {}),
+      },
     );
     this.gateway.emitKitchenProgress({
       orderId,

@@ -5,6 +5,7 @@ import { TableStatus } from './table.schema';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { assertOwnsBranch } from '../../common/scope/branch-scope';
 
 class CreateTableDto {
   @IsString() label: string;
@@ -29,7 +30,16 @@ export class TablesController {
 
   @Get(':id')
   @Roles('admin', 'manager', 'waiter', 'cashier')
-  findOne(@Param('id') id: string) { return this.tablesService.findById(id); }
+  async findOne(@Param('id') id: string, @Request() req: any) {
+    // tablesService.findById deliberately skips scope checks because
+    // internal callers (orders.service, sessions.service) need to load
+    // a table before they can derive its branchId. The HTTP route, on
+    // the other hand, must enforce ownership — otherwise any waiter can
+    // enumerate any branch's tables by ID.
+    const table = await this.tablesService.findById(id);
+    assertOwnsBranch(req.user, table as any);
+    return table;
+  }
 
   @Post()
   @Roles('admin', 'manager')

@@ -14,6 +14,11 @@ export enum OrderStatus {
   BILLED = 'billed',
   PAID = 'paid',
   CLOSED = 'closed',
+  // Terminal state for customer cancellations before the kitchen starts
+  // work. Reachable only from CREATED or CONFIRMED. Once the chef is
+  // PREPARING the customer can no longer cancel — they'd have to ask a
+  // staff member, who'd issue a refund instead.
+  CANCELLED = 'cancelled',
 }
 
 @Schema({ _id: false })
