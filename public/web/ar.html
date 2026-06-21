@@ -99,13 +99,33 @@
     .ar-button {
       position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
       background: linear-gradient(135deg, #c87b3a, #a85a20);
-      color: #fff; font-weight: 800; font-size: 14px; letter-spacing: 1px;
-      padding: 14px 24px; border-radius: 28px; border: none;
-      box-shadow: 0 10px 28px rgba(200, 123, 58, 0.45);
+      color: #fff; font-weight: 800; font-size: 14px; letter-spacing: 1.5px;
+      padding: 16px 28px; border-radius: 28px; border: none;
+      box-shadow:
+        0 10px 28px rgba(200, 123, 58, 0.45),
+        0 0 0 0 rgba(200, 123, 58, 0.6);
       cursor: pointer; z-index: 5;
-      display: flex; align-items: center; gap: 8px;
+      display: flex; align-items: center; gap: 10px;
+      /* Heartbeat pulse so the AR button reads as the primary action and
+         not just decoration. */
+      animation: arPulse 2.2s ease-in-out infinite;
     }
-    .ar-button:active { transform: translateX(-50%) scale(0.97); }
+    @keyframes arPulse {
+      0%, 100% {
+        box-shadow:
+          0 10px 28px rgba(200, 123, 58, 0.45),
+          0 0 0 0 rgba(200, 123, 58, 0.6);
+      }
+      50% {
+        box-shadow:
+          0 14px 36px rgba(200, 123, 58, 0.6),
+          0 0 0 12px rgba(200, 123, 58, 0);
+      }
+    }
+    .ar-button:active {
+      transform: translateX(-50%) scale(0.97);
+      animation-play-state: paused;
+    }
     .hint {
       position: fixed; top: 64px; left: 50%; transform: translateX(-50%);
       font-size: 12px; color: rgba(243, 232, 216, 0.7);
@@ -125,7 +145,7 @@
   <div class="particles"><span></span><span></span><span></span><span></span></div>
   <div class="halo"></div>
 
-  <div class="hint">Drag to rotate · Pinch to zoom · Tap "View in your space"</div>
+  <div class="hint" id="hint">Drag to rotate · Pinch to zoom · Tap "View in your space"</div>
 
   <model-viewer
     id="mv"
@@ -172,6 +192,40 @@
       // Force reflow then re-apply the entrance for the loaded geometry.
       void mv.offsetWidth;
       mv.style.animation = 'appear 0.9s cubic-bezier(0.22, 1, 0.36, 1) forwards';
+    });
+
+    // model-viewer flips canActivateAR=true once Scene Viewer / Quick
+    // Look is reachable. Use that to refine the copy: tell AR-capable
+    // phones to point at the table; otherwise tell the rest they can
+    // still drag-rotate in-page.
+    customElements.whenDefined('model-viewer').then(() => {
+      // canActivateAR settles a frame after the load event.
+      setTimeout(() => {
+        const hint = document.getElementById('hint');
+        if (!hint) return;
+        hint.textContent = mv.canActivateAR
+          ? 'AR ready — point your camera at the table after tapping the button below'
+          : 'Drag to rotate · Pinch to zoom (your device does not support AR)';
+      }, 200);
+    });
+
+    // Hide the in-page "drag to rotate" hint the moment the customer
+    // hands off to native AR — Scene Viewer/Quick Look take over the
+    // viewport and the hint becomes visual noise floating above their
+    // own controls.
+    mv.addEventListener('ar-status', (e) => {
+      const hint = document.querySelector('.hint');
+      const halo = document.querySelector('.halo');
+      const particles = document.querySelector('.particles');
+      if (!hint) return;
+      const inAR = e.detail.status === 'session-started';
+      const fade = inAR ? '0' : '1';
+      hint.style.opacity = fade;
+      // In AR the particles + halo are redundant against the real
+      // world's lighting; fade them too so the placed object looks
+      // grounded instead of floating in front of decoration.
+      if (halo) halo.style.opacity = fade;
+      if (particles) particles.style.opacity = fade;
     });
   </script>
 </body>
