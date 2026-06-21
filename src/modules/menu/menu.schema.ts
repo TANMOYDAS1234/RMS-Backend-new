@@ -15,6 +15,13 @@ class Variant {
 class Modifier {
   @Prop({ required: true }) name: string;
   @Prop({ default: 0 }) extraPrice: number;
+  // Optional 3D model overrides for the modifier (e.g. "extra cheese"
+  // has its own GLB). When set, the customer's customize sheet swaps
+  // the AR target model to this one. Falls back to the item's base
+  // model when null. Pure infrastructure — content (the .glb / .usdz
+  // files) still needs to come from a 3D artist.
+  @Prop({ type: String, default: null }) glbUrl: string | null;
+  @Prop({ type: String, default: null }) usdzUrl: string | null;
 }
 
 @Schema({ _id: false })

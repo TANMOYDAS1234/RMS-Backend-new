@@ -132,8 +132,54 @@
       background: rgba(0,0,0,0.4); padding: 6px 12px; border-radius: 12px;
       backdrop-filter: blur(8px);
       animation: fadeIn 1s ease 1.2s both;
+      max-width: 80vw; text-align: center;
     }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    /* AR install / unsupported banner — only shown when canActivateAR
+       is false. Includes a deep link to Google Play Services for AR on
+       Android so the customer can install it without leaving the flow,
+       and a friendly note for iOS users on phones too old to upgrade. */
+    .install-banner {
+      position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+      max-width: 88vw;
+      background: rgba(40, 24, 16, 0.85);
+      border: 1px solid rgba(200, 123, 58, 0.5);
+      padding: 14px 18px; border-radius: 16px;
+      color: #f3e8d8; font-size: 12px; line-height: 1.5;
+      backdrop-filter: blur(10px);
+      text-align: center;
+      display: none;
+      z-index: 6;
+    }
+    .install-banner.visible { display: block; }
+    .install-banner a {
+      display: inline-block; margin-top: 8px;
+      background: linear-gradient(135deg, #c87b3a, #a85a20);
+      color: #fff; text-decoration: none;
+      padding: 8px 14px; border-radius: 18px;
+      font-weight: 800; letter-spacing: 0.5px;
+    }
+
+    /* First-contact burst — a copper ring that radiates outward the
+       moment AR session starts, signalling to the customer that the
+       hand-off worked. CSS-only, fired by a class toggle in JS. */
+    .burst {
+      position: fixed; left: 50%; top: 50%;
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: rgba(200, 123, 58, 0.85);
+      pointer-events: none; z-index: 8;
+      opacity: 0;
+    }
+    .burst.fire {
+      animation: burst 900ms ease-out forwards;
+    }
+    @keyframes burst {
+      0%   { opacity: 1; transform: translate(-50%, -50%) scale(1); box-shadow: 0 0 0 0 rgba(200,123,58,0.7); }
+      60%  { opacity: 0.8; box-shadow: 0 0 0 80px rgba(200,123,58,0.15); }
+      100% { opacity: 0; transform: translate(-50%, -50%) scale(8); box-shadow: 0 0 0 120px rgba(200,123,58,0); }
+    }
   </style>
 </head>
 <body>
@@ -146,6 +192,12 @@
   <div class="halo"></div>
 
   <div class="hint" id="hint">Drag to rotate · Pinch to zoom · Tap "View in your space"</div>
+
+  <!-- Install / unsupported banner. Populated by JS based on the device. -->
+  <div class="install-banner" id="install"></div>
+
+  <!-- First-contact burst — animates when AR session activates. -->
+  <div class="burst" id="burst"></div>
 
   <model-viewer
     id="mv"
@@ -195,37 +247,73 @@
     });
 
     // model-viewer flips canActivateAR=true once Scene Viewer / Quick
-    // Look is reachable. Use that to refine the copy: tell AR-capable
-    // phones to point at the table; otherwise tell the rest they can
-    // still drag-rotate in-page.
+    // Look is reachable. Use that to refine the copy + surface an
+    // install path on phones where AR isn't yet available.
     customElements.whenDefined('model-viewer').then(() => {
-      // canActivateAR settles a frame after the load event.
       setTimeout(() => {
         const hint = document.getElementById('hint');
-        if (!hint) return;
-        hint.textContent = mv.canActivateAR
-          ? 'AR ready — point your camera at the table after tapping the button below'
-          : 'Drag to rotate · Pinch to zoom (your device does not support AR)';
+        const install = document.getElementById('install');
+        const arBtn = document.querySelector('.ar-button');
+        if (!hint || !install) return;
+
+        if (mv.canActivateAR) {
+          hint.textContent = 'AR ready — point your camera at the table after tapping the button below';
+          return;
+        }
+
+        // Not AR-capable today. Refine the message + give the user a
+        // real next step where one exists.
+        hint.textContent = 'Drag to rotate · Pinch to zoom';
+        if (arBtn) arBtn.style.display = 'none';
+
+        // Detect platform for the install pitch.
+        const ua = navigator.userAgent || '';
+        const isAndroid = /Android/i.test(ua);
+        const isIOS = /iPad|iPhone|iPod/i.test(ua);
+
+        if (isAndroid) {
+          install.innerHTML =
+            'AR not available on this phone yet.<br/>' +
+            'Install Google Play Services for AR to unlock the back-camera preview.' +
+            '<br/><a href="https://play.google.com/store/apps/details?id=com.google.ar.core" target="_blank" rel="noopener">Install ARCore</a>';
+          install.classList.add('visible');
+        } else if (isIOS) {
+          install.innerHTML =
+            'AR Quick Look needs iOS 11 or later on an iPhone 6s and newer.<br/>' +
+            'Update your iPhone (or open this page on a newer device) to view in your space.';
+          install.classList.add('visible');
+        } else {
+          install.innerHTML =
+            'Your device does not support augmented reality.<br/>' +
+            'Open this page on a recent Android or iPhone to point the camera at your table.';
+          install.classList.add('visible');
+        }
       }, 200);
     });
 
     // Hide the in-page "drag to rotate" hint the moment the customer
     // hands off to native AR — Scene Viewer/Quick Look take over the
     // viewport and the hint becomes visual noise floating above their
-    // own controls.
+    // own controls. Also fire the first-contact burst the same moment
+    // so the hand-off feels punctuated rather than silent.
     mv.addEventListener('ar-status', (e) => {
       const hint = document.querySelector('.hint');
       const halo = document.querySelector('.halo');
       const particles = document.querySelector('.particles');
+      const burst = document.getElementById('burst');
       if (!hint) return;
       const inAR = e.detail.status === 'session-started';
       const fade = inAR ? '0' : '1';
       hint.style.opacity = fade;
-      // In AR the particles + halo are redundant against the real
-      // world's lighting; fade them too so the placed object looks
-      // grounded instead of floating in front of decoration.
       if (halo) halo.style.opacity = fade;
       if (particles) particles.style.opacity = fade;
+      if (inAR && burst) {
+        // Restart the animation each time by toggling the class.
+        burst.classList.remove('fire');
+        // Force reflow so re-adding the class fires the keyframes.
+        void burst.offsetWidth;
+        burst.classList.add('fire');
+      }
     });
   </script>
 </body>
