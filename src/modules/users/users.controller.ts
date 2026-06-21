@@ -11,6 +11,7 @@ import { UserRole } from './user.schema';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { Public } from '../../common/decorators/public.decorator';
 import { resolveBranchIdForCreate, isAdmin } from '../../common/scope/branch-scope';
 import { NotificationsService } from '../notifications/notifications.service';
 import { DevicePlatform } from '../notifications/fcm-token.schema';
@@ -172,7 +173,13 @@ export class UsersController {
     return this.usersService.uploadPhoto(id, file, req.user);
   }
 
+  // Marked @Public so the Flutter CachedNetworkImage and any browser <img>
+  // tag can fetch the bytes directly — neither sends a Bearer token. The
+  // URL is gated by knowing the user ObjectId (24 hex chars, not enumerable)
+  // and the photo bytes are not sensitive PII beyond what colleagues
+  // already see in the org. Keeps the rest of /users behind JWT.
   @Get(':id/photo')
+  @Public()
   async servePhoto(@Param('id') id: string, @Res() res: Response) {
     const user = await this.usersService.findByIdWithPhoto(id);
     if (!user?.photoData) return res.status(404).send('Not found');
