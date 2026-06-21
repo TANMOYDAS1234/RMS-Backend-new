@@ -118,7 +118,12 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
     branchId: string;
   }) {
     if (!data.branchId) return;
+    // Branch fanout for managers and chefs sitting on that branch's room…
     this.server.to(`branch:${data.branchId}`).emit('inventory:updated', data);
+    // …plus a copy to every admin. Admins don't carry a branchId on their
+    // JWT (they're cross-branch), so the branch:* room never reaches them
+    // and the admin Inventory tab silently lagged on chef/manager edits.
+    this.server.to('role:admin').emit('inventory:updated', data);
   }
 
   // ── ACK system ──────────────────────────────────────────────────────────────
