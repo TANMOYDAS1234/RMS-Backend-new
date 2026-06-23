@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Patch, Delete, Body, Param, Request, UseGuards,
+  Controller, Get, Post, Patch, Delete, Body, Param, Query, Request, UseGuards,
   ForbiddenException,
 } from '@nestjs/common';
 import { IsBoolean, IsNumber, IsOptional, IsString } from 'class-validator';
@@ -79,8 +79,28 @@ export class BranchesController {
     return this.branchesService.updateFeatures(id, features);
   }
 
+  // Pre-flight count: how many users / menu items / tables / orders /
+  // bills / ingredients point at this branch. Admin UI shows this in
+  // the delete confirmation so they can see the blast radius before
+  // pulling the trigger.
+  @Get(':id/deletion-preview')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('admin')
+  deletionPreview(@Param('id') id: string) {
+    return this.branchesService.getDeletionPreview(id);
+  }
+
+  // Default delete refuses when the branch has dependents — admin must
+  // pass ?cascade=true to confirm the cascade. Without that gate, a
+  // single tap on Delete could wipe an entire branch's users, menu,
+  // tables, orders, bills, and ingredients silently.
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
-  delete(@Param('id') id: string) { return this.branchesService.delete(id); }
+  delete(
+    @Param('id') id: string,
+    @Query('cascade') cascade?: string,
+  ) {
+    return this.branchesService.delete(id, cascade === 'true');
+  }
 }
