@@ -73,6 +73,23 @@ export class InventoryService {
       .lean();
   }
 
+  /// Backfill: assign a branchId to every ingredient that has no branch
+  /// on file. The seed script wrote the initial ten ingredients without
+  /// a branchId (multi-branch was added later) which makes them invisible
+  /// to per-branch UIs and prevents low-stock fanout (the WS emit drops
+  /// payloads with an empty branchId). Admin calls this once per orphaned
+  /// branch to re-home them. Returns the count actually mutated.
+  async assignOrphansToBranch(branchId: string) {
+    if (!branchId) {
+      throw new BadRequestException('branchId is required');
+    }
+    const res = await this.ingredientModel.updateMany(
+      { $or: [{ branchId: null }, { branchId: { $exists: false } }, { branchId: '' }] },
+      { $set: { branchId } },
+    );
+    return { assigned: res.modifiedCount ?? 0, branchId };
+  }
+
   /// Re-fire low-stock notifications for every ingredient in scope that's
   /// currently at or below threshold. The normal flow only sends when the
   /// item *transitions* from OK to low — if an item was seeded already

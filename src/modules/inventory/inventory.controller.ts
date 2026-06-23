@@ -43,6 +43,16 @@ export class InventoryController {
     return this.inventoryService.scanLowStock(req.user);
   }
 
+  // One-shot cleanup for ingredients seeded before the multi-branch
+  // schema added branchId. Admin posts the target branch and every
+  // orphan ingredient gets re-homed there so it shows up in the
+  // per-branch UIs and so live-broadcasts actually fan out.
+  @Post('assign-orphans')
+  @Roles('admin')
+  assignOrphans(@Body() body: { branchId: string }) {
+    return this.inventoryService.assignOrphansToBranch(body?.branchId);
+  }
+
   @Get(':id')
   @Roles('admin', 'manager', 'chef')
   findOne(@Param('id') id: string, @Request() req: any) {
